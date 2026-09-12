@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { connectLive } from "../../web/live.js";
-import { browser, flush, replaceGlobals, Stream, Track } from "./fakes.mjs";
+import { audioAnalysis, browser, flush, replaceGlobals, Stream, Track } from "./fakes.mjs";
 
 function setup(t, options = {}) {
   const env = browser();
@@ -453,5 +453,230 @@ test("unavailable activity detection leaves voice transport working with visible
   await live.setOutputMuted(false);
   assert.equal(f.env.audios[0].muted, false);
   assert.equal(f.env.audios[0].plays, 1);
+  finalized(f);
+});
+
+function inputActivitySetup(t, options = {}) {
+  const analysis = audioAnalysis(options);
+  const activity = [];
+  const f = setup(t, { onInputActivity: (active, details) => activity.push({ active, ...details }), ...options.live });
+  t.after(analysis.restore);
+  return { ...f, peer: f.peer, analysis, activity };
+}
+
+test("initial and long input silence never provide approval evidence", async (t) => {
+  const f = inputActivitySetup(t);
+  await ready(f);
+  f.analysis.tick(5000);
+  assert.ok(f.activity.length > 1);
+  for (const event of f.activity) {
+    assert.equal(event.active, false);
+    assert.equal(event.available, true);
+    assert.equal(event.lastActiveAt, null);
+    assert.equal(event.quietSince, null);
+    assert.equal(event.quietMs, 0);
+  }
+  assert.equal(f.activity.at(-1).observedAt, 5000);
+  assert.deepEqual(f.analysis.contexts[0].sources[0].stream.getTracks(), [f.input]);
+  finalized(f);
+});
+
+test("input speech requires sustained activity and reports actual quiet with monotonic timing", async (t) => {
+  const f = inputActivitySetup(t);
+  await ready(f);
+  f.input.level = 0.05;
+  f.analysis.tick(150);
+  assert.equal(f.activity.at(-1).active, false);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  f.analysis.tick(50);
+  assert.deepEqual(f.activity.at(-1), {
+    active: true, available: true, observedAt: 200, lastActiveAt: 200,
+    quietSince: null, quietMs: 0, reason: "speech",
+  });
+  f.input.level = 0.01; // Hysteresis keeps quieter syllables inside the utterance.
+  f.analysis.tick(50);
+  assert.equal(f.activity.at(-1).active, true);
+  assert.equal(f.activity.at(-1).lastActiveAt, 250);
+  f.input.level = 0;
+  f.analysis.tick(250);
+  assert.equal(f.activity.at(-1).active, true);
+  f.analysis.tick(50);
+  assert.deepEqual(f.activity.at(-1), {
+    active: false, available: true, observedAt: 550, lastActiveAt: 250,
+    quietSince: 300, quietMs: 250, reason: "quiet",
+  });
+  f.analysis.tick(750);
+  assert.equal(f.activity.at(-1).quietMs, 1000);
+  assert.equal(f.activity.at(-1).observedAt, 1300);
+  f.input.level = 0.03; // Fresh onset immediately removes the eligible quiet window.
+  f.analysis.tick(50);
+  assert.equal(f.activity.at(-1).quietSince, null);
+  assert.equal(f.activity.at(-1).quietMs, 0);
+  finalized(f);
+});
+
+test("brief input noise never qualifies as approval speech", async (t) => {
+  const f = inputActivitySetup(t);
+  await ready(f);
+  for (let count = 0; count < 3; count++) {
+    f.input.level = 0.2;
+    f.analysis.tick(100);
+    f.input.level = 0;
+    f.analysis.tick(1000);
+  }
+  assert.ok(f.activity.every((event) => !event.active && event.lastActiveAt === null && event.quietMs === 0));
+  finalized(f);
+});
+
+test("disabled or browser-muted input clears evidence and must hear fresh activity after recovery", async (t) => {
+  const f = inputActivitySetup(t);
+  const live = await ready(f);
+  f.input.level = 0.05;
+  f.analysis.tick(200);
+  assert.equal(f.activity.at(-1).active, true);
+  live.setInputEnabled(false);
+  assert.equal(f.activity.at(-1).available, false);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  f.analysis.tick(1500);
+  assert.equal(f.activity.at(-1).quietMs, 0);
+  live.setInputEnabled(true);
+  f.input.level = 0;
+  f.analysis.tick(1500);
+  assert.equal(f.activity.at(-1).available, true);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  f.input.level = 0.05;
+  f.analysis.tick(200);
+  f.input.mute();
+  assert.equal(f.activity.at(-1).available, false);
+  f.analysis.tick(1500);
+  assert.equal(f.activity.at(-1).quietMs, 0);
+  f.input.unmute();
+  f.input.level = 0;
+  f.analysis.tick(1500);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  f.input.enabled = false; // Direct track changes are also caught on the next sample.
+  f.analysis.tick(50);
+  assert.equal(f.activity.at(-1).available, false);
+  finalized(f);
+});
+
+test("input and output activity use separate streams and Stop keeps listening", async (t) => {
+  const output = [];
+  const f = inputActivitySetup(t, { live: { onOutputActivity: (active) => output.push(active) } });
+  const live = await ready(f);
+  const remote = new Track();
+  remote.level = 0.05;
+  f.peer.receiveTrack(remote);
+  await live.setOutputMuted(false);
+  f.analysis.tick(500);
+  assert.deepEqual(output, [true]);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  assert.deepEqual(f.analysis.contexts[0].sources[0].stream.getTracks(), [f.input]);
+  assert.deepEqual(f.analysis.contexts[1].sources[0].stream.getTracks(), [remote]);
+  live.setOutputMuted(true);
+  f.input.level = 0.05;
+  f.analysis.tick(200);
+  assert.equal(f.activity.at(-1).active, true);
+  assert.equal(f.input.enabled, true);
+  assert.deepEqual(output, [true, false]);
+  finalized(f);
+});
+
+test("revoked source immediately stops the input observer and releases its nodes", async (t) => {
+  const f = inputActivitySetup(t);
+  await ready(f);
+  f.input.level = 0.05;
+  f.analysis.tick(200);
+  f.input.end();
+  assert.equal(f.activity.at(-1).available, false);
+  assert.equal(f.activity.at(-1).quietMs, 0);
+  assert.equal(f.analysis.timers.size, 0);
+  const context = f.analysis.contexts[0];
+  assert.equal(context.closes, 1);
+  assert.equal(context.sources[0].disconnected, true);
+  assert.equal(context.analysers[0].disconnected, true);
+  const count = f.activity.length;
+  f.input.mute();
+  context.change("suspended");
+  f.analysis.tick(5000);
+  assert.equal(f.activity.length, count);
+  finalized(f);
+  assert.equal(context.closes, 1);
+});
+
+test("abort during startup removes activity timers, context, and track listeners", async (t) => {
+  const controller = new AbortController();
+  const f = inputActivitySetup(t, { live: { signal: controller.signal } });
+  await flush();
+  controller.abort();
+  await assert.rejects(f.connecting, /canceled|closed/);
+  assert.equal(f.analysis.timers.size, 0);
+  assert.equal(f.analysis.contexts[0].state, "closed");
+  const count = f.activity.length;
+  f.input.mute();
+  f.analysis.contexts[0].change("suspended");
+  f.analysis.tick(5000);
+  assert.equal(f.activity.length, count);
+});
+
+test("failed or suspended audio context cannot generate a quiet approval window", async (t) => {
+  const f = inputActivitySetup(t, { initialState: "suspended", resumeFails: true });
+  await ready(f);
+  f.input.level = 0.2;
+  f.analysis.tick(2000);
+  assert.ok(f.activity.every((event) => !event.available && event.lastActiveAt === null && event.quietMs === 0));
+  const context = f.analysis.contexts[0];
+  context.change("running");
+  f.analysis.tick(200);
+  assert.equal(f.activity.at(-1).active, true);
+  context.change("suspended");
+  assert.equal(f.activity.at(-1).available, false);
+  f.input.level = 0;
+  context.change("running");
+  f.analysis.tick(2000);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  assert.equal(f.activity.at(-1).quietMs, 0);
+  finalized(f);
+});
+
+test("unavailable input analyser fails closed while ordinary voice transport still works", async (t) => {
+  const f = inputActivitySetup(t, { analyserFails: true });
+  const live = await ready(f);
+  assert.equal(f.activity.at(-1).available, false);
+  assert.equal(f.activity.at(-1).quietSince, null);
+  assert.equal(f.analysis.contexts[0].state, "closed");
+  assert.equal(f.analysis.timers.size, 0);
+  assert.ok(f.states.some((event) => event.state === "input-activity-unavailable"));
+  f.peer.receiveTrack(new Track());
+  await live.setOutputMuted(false);
+  assert.equal(f.env.audios[0].muted, false);
+  finalized(f);
+});
+
+test("input activity callback is optional and allocates no observer when omitted", async (t) => {
+  const analysis = audioAnalysis();
+  const f = setup(t);
+  t.after(analysis.restore);
+  const live = await ready(f);
+  assert.equal(analysis.contexts.length, 0);
+  assert.equal(analysis.timers.size, 0);
+  live.setInputEnabled(false);
+  live.setInputEnabled(true);
+  finalized(f);
+});
+
+test("invalid analyser samples invalidate prior speech and release the observer", async (t) => {
+  const f = inputActivitySetup(t);
+  await ready(f);
+  f.input.level = 0.05;
+  f.analysis.tick(200);
+  assert.equal(f.activity.at(-1).active, true);
+  f.input.level = NaN;
+  f.analysis.tick(50);
+  assert.equal(f.activity.at(-1).available, false);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  assert.equal(f.activity.at(-1).quietMs, 0);
+  assert.equal(f.analysis.timers.size, 0);
+  assert.equal(f.analysis.contexts[0].state, "closed");
   finalized(f);
 });

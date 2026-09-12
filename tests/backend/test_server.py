@@ -21,21 +21,67 @@ def make_call(client, **changes):
     return body
 
 
+def approve_call(client, body):
+    proposal = client.post(
+        "/api/approvals/prepare",
+        json={key: value for key, value in body.items() if key != "approved"},
+    )
+    assert proposal.status_code == 200, proposal.text
+    token = {
+        "session_id": body["session_id"],
+        "approval_id": proposal.json()["approval_id"],
+    }
+    armed = client.post(
+        "/api/approvals/arm",
+        json={
+            **token,
+            "playback_finished": True,
+            "output_events": [
+                {
+                    "type": "session.output_transcript.delta",
+                    "event_id": "output-1",
+                    "delta": proposal.json()["prompt"],
+                    "start_ms": 1000,
+                    "end_ms": 2000,
+                }
+            ],
+        },
+    )
+    assert armed.status_code == 200, armed.text
+    voice = {
+        **token,
+        "speech_finished": True,
+        "quiet_ms": 1000,
+        "input_events": [
+            {
+                "type": "session.input_transcript.delta",
+                "event_id": "input-1",
+                "delta": "Yes please.",
+                "start_ms": 2200,
+                "end_ms": 2400,
+            }
+        ],
+    }
+    return client.post("/api/approvals/voice", json=voice), voice
+
+
 def test_complete_http_handoff_and_duplicate_receipts(server_fixture):
     _, client, live, calls = server_fixture()
     body = make_call(client)
-    first = client.post("/api/tools/execute", json=body)
-    again = client.post("/api/tools/execute", json=body)
+    first, voice = approve_call(client, body)
+    again = client.post("/api/approvals/voice", json=voice)
     assert first.status_code == again.status_code == 200
     assert first.json() == again.json()
-    assert set(first.json()) == {"call_id", "output"}
-    assert isinstance(first.json()["output"], str)
-    assert json.loads(first.json()["output"])["number"] == 42
+    assert first.json()["status"] == "approved"
+    receipt = first.json()["receipt"]
+    assert set(receipt) == {"call_id", "output"}
+    assert isinstance(receipt["output"], str)
+    assert json.loads(receipt["output"])["number"] == 42
     assert len(calls) == 1
     assert live.requests[0][0] == "v=0\r\noffer\r\n"
 
 
-def test_http_review_can_approve_same_call_after_denial(server_fixture):
+def test_http_boolean_cannot_replace_spoken_approval(server_fixture):
     _, client, _, calls = server_fixture()
     body = make_call(client)
     del body["approved"]
@@ -46,9 +92,14 @@ def test_http_review_can_approve_same_call_after_denial(server_fixture):
     )
     assert calls == []
     body["approved"] = True
-    accepted = client.post("/api/tools/execute", json=body)
+    bypass = client.post("/api/tools/execute", json=body)
+    assert (
+        json.loads(bypass.json()["output"])["error"]["code"] == "authorization_required"
+    )
+    assert not calls
+    accepted, _ = approve_call(client, body)
     assert accepted.status_code == 200
-    assert json.loads(accepted.json()["output"])["number"] == 42
+    assert json.loads(accepted.json()["receipt"]["output"])["number"] == 42
     assert len(calls) == 1
 
 
@@ -192,11 +243,11 @@ def test_tool_exception_is_a_receipt_without_credentials(server_fixture, setting
 
     _, client, _, calls = server_fixture(runner=explode)
     body = make_call(client)
-    response = client.post("/api/tools/execute", json=body)
+    response, voice = approve_call(client, body)
     assert response.status_code == 200
     assert settings.api_key not in response.text
-    assert json.loads(response.json()["output"])["ok"] is False
-    assert client.post("/api/tools/execute", json=body).json() == response.json()
+    assert json.loads(response.json()["receipt"]["output"])["ok"] is False
+    assert client.post("/api/approvals/voice", json=voice).json() == response.json()
     assert len(calls) == 1
 
 
@@ -245,7 +296,7 @@ def test_project_write_http_approval_is_bound_to_exact_change(server_fixture, sc
         == "call_conflict"
     )
     body["approved"] = True
-    accepted = client.post("/api/tools/execute", json=body)
+    accepted, _ = approve_call(client, body)
     assert accepted.status_code == 200
-    assert json.loads(accepted.json()["output"])["ok"] is True
+    assert json.loads(accepted.json()["receipt"]["output"])["ok"] is True
     assert len(calls) == 1

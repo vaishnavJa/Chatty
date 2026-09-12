@@ -16,6 +16,7 @@ from chatty.integrations.gpt_live.executor import (
     ToolRegistry,
 )
 from chatty.integrations.meeting_vision import MeetingVisionClient, VisionError
+from chatty.voice_approval import VoiceApprovals
 
 MAX_IDENTIFIER_LENGTH = 256
 MAX_VISION_BODY_BYTES = 384 * 1024
@@ -95,6 +96,7 @@ class ChattyApp:
             else MeetingVisionClient(settings)
         )
         self.executor = ToolExecutor(settings)
+        self.approvals = VoiceApprovals(self.executor)
         # Serializes capacity check + upstream creation + registration.
         self.creation_lock = threading.Lock()
 
@@ -129,7 +131,7 @@ class ChattyApp:
             raise ExecutorError(
                 400,
                 "invalid_approval",
-                "approved must be a boolean from the review button.",
+                "approved must be a boolean; spoken approval uses the approval endpoints.",
             )
         session_id = required_string(body, "session_id", MAX_IDENTIFIER_LENGTH)
         call_id = required_string(body, "call_id", MAX_IDENTIFIER_LENGTH)
@@ -148,8 +150,64 @@ class ChattyApp:
                 "Enable incoming screen context and use the meeting vision endpoint.",
             )
         return self.executor.execute(
-            session_id, call_id, name, arguments, approved=approved
+            # Never turn a browser/model supplied boolean into write authority.
+            # Only VoiceApprovals executes its previously saved confirmed action.
+            session_id,
+            call_id,
+            name,
+            arguments,
+            approved=False,
         )
+
+    def voice_approval(self, action: str, body: dict) -> dict:
+        fields = {
+            "prepare": {"session_id", "call_id", "name", "arguments"},
+            "arm": {"session_id", "approval_id", "output_events", "playback_finished"},
+            "voice": {
+                "session_id",
+                "approval_id",
+                "input_events",
+                "speech_finished",
+                "quiet_ms",
+            },
+            "cancel": {"session_id"},
+        }
+        required = fields[action]
+        optional = {"approval_id"} if action == "cancel" else set()
+        if not required <= body.keys() or set(body) - required - optional:
+            raise ExecutorError(
+                400, "invalid_request", "Unexpected or missing spoken approval fields."
+            )
+        session_id = required_string(body, "session_id", MAX_IDENTIFIER_LENGTH)
+        if action == "prepare":
+            call_id = required_string(body, "call_id", MAX_IDENTIFIER_LENGTH)
+            name = required_string(body, "name", 64)
+            if not isinstance(body["arguments"], dict):
+                raise ExecutorError(
+                    400, "invalid_arguments", "arguments must be a parsed JSON object."
+                )
+            return self.approvals.prepare(session_id, call_id, name, body["arguments"])
+        approval_id = (
+            required_string(body, "approval_id", MAX_IDENTIFIER_LENGTH)
+            if "approval_id" in body
+            else None
+        )
+        if action == "arm":
+            return self.approvals.arm(
+                session_id,
+                approval_id,
+                body["output_events"],
+                body["playback_finished"],
+            )
+        if action == "voice":
+            return self.approvals.voice(
+                session_id,
+                approval_id,
+                body["input_events"],
+                body["speech_finished"],
+                body["quiet_ms"],
+            )
+        return self.approvals.cancel(session_id, approval_id)
 
     def analyze_vision(self, body: dict) -> dict:
         if set(body) != {"session_id", "call_id", "question", "frame"}:
@@ -351,6 +409,10 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/live/session",
                 "/api/tools/execute",
                 "/api/vision/analyze",
+                "/api/approvals/prepare",
+                "/api/approvals/arm",
+                "/api/approvals/voice",
+                "/api/approvals/cancel",
             }:
                 raise ExecutorError(404, "not_found", "Unknown endpoint.")
             body = self.read_body(
@@ -362,6 +424,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_reply(201, self.server.app.create_session(body))
             elif self.path == "/api/vision/analyze":
                 self.json_reply(200, self.server.app.analyze_vision(body))
+            elif self.path.startswith("/api/approvals/"):
+                self.json_reply(
+                    200,
+                    self.server.app.voice_approval(self.path.rsplit("/", 1)[1], body),
+                )
             else:
                 self.json_reply(200, self.server.app.execute_tool(body))
         except (ExecutorError, LiveError) as error:

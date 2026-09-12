@@ -67,5 +67,7 @@ Existing environment variables take precedence. Never place credentials in `web/
 The four demo issues split ownership across the Live backend, meeting audio,
 GitHub tools, and UI. Integrate their documented interfaces, then verify a real
 meeting conversation and one explicitly requested issue creation. Jira and other
-services are future work. This demo is for a trusted operator on one laptop;
-multi-user authentication and approval workflows are not implemented.
+services are future work. All supported GitHub mutations use a saved proposal
+and [spoken approval](docs/voice-approval.md); no browser approval click is needed.
+This demo trusts the local browser and meeting participants. It does not identify
+or authenticate individual speakers.

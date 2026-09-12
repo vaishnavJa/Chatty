@@ -140,13 +140,13 @@ function renderCaptions(controller) {
 }
 
 function renderTools(controller) {
-  const signature = JSON.stringify([...controller.calls.values()].map(call => [call.call_id, call.status, call.message, call.output])) + controller.speech + controller.active;
+  const signature = JSON.stringify([...controller.calls.values()].map(call => [call.call_id, call.status, call.message, call.proposal, call.output])) + controller.speech + controller.active;
   if (toolViews.get(controller) === signature) return;
   toolViews.set(controller, signature);
   const container = $('tool-activity');
   $('action-count').textContent = String(controller.calls.size);
   if (!controller.calls.size) return;
-  const labels = { pending: 'Pending', running: 'Working…', approval: 'Review required', complete: 'Confirmed', error: 'Failed', rejected: 'Not applied', uncertain: 'Check GitHub', canceled: 'Canceled' };
+  const labels = { pending: 'Pending', running: 'Working…', approval: 'Spoken approval', complete: 'Confirmed', error: 'Failed', rejected: 'Not applied', uncertain: 'Check GitHub', canceled: 'Canceled' };
   const cards = [...controller.calls.values()].reverse().map(call => {
     const card = element('article', `tool-card ${call.status}`);
     const heading = element('div', 'tool-heading');
@@ -155,16 +155,16 @@ function renderTools(controller) {
     if (call.capability?.requires_approval) {
       card.append(element('p', '', `Target: ${reviewTarget(call)}`));
       if (call.status === 'approval') {
-        card.append(element('pre', 'tool-body', JSON.stringify(call.arguments, null, 2)));
-        if (call.capability.destructive) card.append(element('p', '', 'Destructive change: review every proposed field before approving. This can remove data or change repository history.'));
+        if (call.proposal) card.append(element('p', '', call.proposal));
+        const proposal = element('details');
+        proposal.append(element('summary', '', 'View exact proposed change'), element('pre', 'tool-body', JSON.stringify(call.arguments, null, 2)));
+        card.append(proposal);
+        if (call.capability.destructive) card.append(element('p', '', 'This change can remove data or change repository history. Listen to the exact proposal before replying.'));
         const buttons = element('div', 'approval-actions');
-        const approve = element('button', 'button primary', call.capability.destructive ? 'Approve destructive change' : 'Approve change');
-        const reject = element('button', 'button', 'Reject');
-        approve.disabled = !active(controller) || controller.speech !== 'listening' || controller.groups.get(call.key)?.blocked;
+        const reject = element('button', 'button', 'Cancel change');
         reject.disabled = !active(controller);
-        approve.addEventListener('click', () => controller.approve(call.call_id));
         reject.addEventListener('click', () => controller.reject(call.call_id));
-        buttons.append(approve, reject);
+        buttons.append(reject);
         card.append(buttons);
       }
     }
@@ -191,19 +191,23 @@ function render(controller) {
   }
   renderStatus(); renderCaptions(controller); renderTools(controller);
 }
-async function executeTool(body, signal) {
-  const response = await fetch('/api/tools/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+async function postJson(path, body, signal) {
+  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!response.ok) {
     let message = `Tool request failed (HTTP ${response.status}).`;
     try {
       const data = await response.json();
       if (typeof data.error === 'string') message = data.error;
+      else if (typeof data.error?.message === 'string') message = data.error.message;
       else if (typeof data.detail === 'string') message = data.detail;
     } catch { /* Keep the HTTP status if the error body isn't JSON. */ }
     throw new Error(message);
   }
   return response.json();
 }
+const executeTool = (body, signal) => postJson('/api/tools/execute', body, signal);
+const approveByVoice = (action, body, signal) => postJson(`/api/approvals/${action}`, body, signal);
+
 function resetViews() {
   $('captions').replaceChildren(element('div', 'empty-state', 'Listening captions will appear here.'));
   $('tool-activity').replaceChildren(element('div', 'activity-empty', 'Repository and project lookups and change receipts will appear here.'));
@@ -216,7 +220,7 @@ async function startSession() {
   clearError();
   const source = controls.source.value;
   const run = { id: ++sequence, source, outputDeviceId: controls.output.value, screenContext: controls.vision.checked, abort: new AbortController(), capture: null, handle: null, controller: null, vision: null, visionState: 'off' };
-  run.controller = new DemoController({ source, capabilities, execute: (body, signal) => {
+  run.controller = new DemoController({ source, capabilities, approval: approveByVoice, execute: (body, signal) => {
     if (body.name !== 'read_meeting_screen') return executeTool(body, signal);
     if (!run.vision?.enabled || current !== run) throw new Error('Incoming screen context is off. Enable it before starting a meeting session.');
     return run.vision.analyze(body.arguments.question, { callId: body.call_id, signal });
@@ -231,11 +235,13 @@ async function startSession() {
     const handle = await connectLive({
       stream: capture.stream, signal: run.abort.signal, outputDeviceId: run.outputDeviceId,
       onOutputActivity: value => run.controller.outputActivity(value),
+      onInputActivity: (value, details) => run.controller.inputActivity(value, details),
       onEvent: event => run.controller.event(event),
       onState: (state, details = {}) => {
         if (current !== run) return;
         if (state === 'error') showError(details.message);
         if (state === 'output-activity-unavailable') run.outputActivityAvailable = false;
+        if (state === 'input-activity-unavailable') showError('Spoken approval needs working input audio activity detection. End the session and reconnect the audio source.');
         if (state === 'playback-blocked') showError(details.message ?? 'Click Resume to allow audio playback.');
         if (state === 'connecting' || state === 'ready' || state === 'reconnecting' || state === 'closing') phase = state;
         if (state === 'closed') {

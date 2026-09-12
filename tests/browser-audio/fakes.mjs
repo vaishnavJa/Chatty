@@ -8,12 +8,16 @@ export class Track extends EventTarget {
     this.kind = kind;
     this.readyState = "live";
     this.enabled = true;
+    this.muted = false;
+    this.level = 0;
     this.stops = 0;
     this.settings = settings;
   }
   getSettings() { return this.settings; }
   stop() { this.stops++; this.readyState = "ended"; }
   end() { this.readyState = "ended"; this.dispatchEvent(new Event("ended")); }
+  mute() { this.muted = true; this.dispatchEvent(new Event("mute")); }
+  unmute() { this.muted = false; this.dispatchEvent(new Event("unmute")); }
 }
 
 export class Stream extends EventTarget {
@@ -34,6 +38,69 @@ export function replaceGlobals(values) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else delete globalThis[key];
     }
+  };
+}
+
+// Deterministic local audio only: no microphone, audio hardware, or API calls.
+export function audioAnalysis({ initialState = "running", resumeFails = false, analyserFails = false } = {}) {
+  let now = 0;
+  let timerId = 0;
+  const timers = new Map();
+  const contexts = [];
+  class Context extends EventTarget {
+    state = initialState;
+    sources = [];
+    analysers = [];
+    closes = 0;
+    constructor() { super(); contexts.push(this); }
+    createAnalyser() {
+      if (analyserFails) throw new Error("Analyser unavailable.");
+      const analyser = {
+        disconnected: false, reads: 0,
+        getFloatTimeDomainData(samples) {
+          this.reads++;
+          samples.fill(this.stream.getAudioTracks()[0].level);
+        },
+        disconnect() { this.disconnected = true; },
+      };
+      this.analysers.push(analyser);
+      return analyser;
+    }
+    createMediaStreamSource(stream) {
+      const source = {
+        stream, disconnected: false,
+        connect(node) { node.stream = stream; },
+        disconnect() { this.disconnected = true; },
+      };
+      this.sources.push(source);
+      return source;
+    }
+    change(state) { this.state = state; this.dispatchEvent(new Event("statechange")); }
+    async resume() {
+      if (resumeFails) throw new Error("Resume denied.");
+      this.change("running");
+    }
+    async close() { this.closes++; this.change("closed"); }
+  }
+  const restore = replaceGlobals({
+    AudioContext: Context,
+    performance: { now: () => now },
+    setInterval(fn, interval) { const id = ++timerId; timers.set(id, { fn, interval, at: now + interval }); return id; },
+    clearInterval(id) { timers.delete(id); },
+  });
+  return {
+    contexts, timers, restore,
+    tick(ms) {
+      const end = now + ms;
+      while (true) {
+        const next = [...timers.values()].filter((timer) => timer.at <= end).sort((a, b) => a.at - b.at)[0];
+        if (!next) break;
+        now = next.at;
+        next.at += next.interval;
+        next.fn();
+      }
+      now = end;
+    },
   };
 }
 

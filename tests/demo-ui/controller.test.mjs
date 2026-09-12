@@ -3,22 +3,70 @@ import assert from 'node:assert/strict';
 import { DemoController, githubLinks } from '../../web/controller.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function fixture({ source = 'microphone', execute, capabilities, timers, now, attach = true } = {}) {
-  const sent = [], muted = [], inputs = [], requests = [], errors = [];
-  const handle = { sessionId: 'live_test', send: event => sent.push(event), setOutputMuted: value => muted.push(value), setInputEnabled: value => inputs.push(value), close() {} };
-  const controller = new DemoController({ source, ...(timers ? { timers, now } : {}), ...(capabilities !== undefined ? { capabilities } : {}), onError: error => errors.push(error), execute: execute ?? (async body => {
+function fixture({ source = 'microphone', execute, approval, capabilities, timers, now, tick, attach = true } = {}) {
+  const clock = timers ? { timers, now, tick } : clockFixture();
+  const sent = [], muted = [], inputs = [], requests = [], errors = [], approvalRequests = [];
+  const proposals = new Map();
+  const executeRequest = execute ?? (async body => {
     requests.push(body);
     return { call_id: body.call_id, output: JSON.stringify({ ok: true, data: { url: 'https://github.com/vaishnavJa/Chatty/issues/42' } }) };
-  }) });
+  });
+  const approvalRequest = approval ?? (async (action, body) => {
+    approvalRequests.push({ action, ...body });
+    if (action === 'prepare') {
+      const approval_id = `approval_${body.call_id}`;
+      proposals.set(approval_id, body);
+      return { approval_id, call_id: body.call_id, prompt: `Proposed ${body.name}: ${JSON.stringify(body.arguments)}. Do you approve this change?`, expires_at: clock.now() + 60000 };
+    }
+    if (action === 'arm') return { armed: true };
+    if (action === 'cancel') return { status: 'rejected' };
+    const text = body.input_events.map(event => event.delta).join('').toLowerCase().replace(/[.,!?]/g, '').trim();
+    if (!['yes', 'yes please', 'yes do it', 'confirm', 'chatty confirm', 'go ahead'].includes(text)) return { status: ['no', 'cancel', 'chatty stop'].includes(text) ? 'rejected' : 'ambiguous', receipt: { call_id: proposals.get(body.approval_id).call_id, output: JSON.stringify({ ok: false, error: 'The spoken response did not approve this change.' }) } };
+    return { status: 'approved', receipt: await executeRequest(proposals.get(body.approval_id)) };
+  });
+  const handle = { sessionId: 'live_test', send: event => sent.push(event), setOutputMuted: value => muted.push(value), setInputEnabled: value => inputs.push(value), close() {} };
+  const controller = new DemoController({ source, timers: clock.timers, now: clock.now, ...(capabilities !== undefined ? { capabilities } : {}), onError: error => errors.push(error), execute: executeRequest, approval: approvalRequest });
   if (attach) controller.attach(handle);
   const nested = (event, delegation_id = 'delegation_a') => controller.event({ type: 'response.event', delegation_id, event });
   const created = (id = 'response_a') => nested({ type: 'response.created', response: { id } });
   const call = (id = 'call_a', name = 'list_recent_commits', args = { limit: 3 }) => nested({ type: 'response.output_item.done', item: { type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) } });
   const completed = (id = 'response_a') => nested({ type: 'response.completed', response: { id, output: [] } });
-  return { controller, sent, muted, inputs, requests, errors, handle, nested, created, call, completed };
+  return { controller, sent, muted, inputs, requests, errors, approvalRequests, handle, nested, created, call, completed, clock };
 }
 const continuations = f => f.sent.filter(event => event.type === 'response.create');
 const results = f => f.sent.filter(event => event.type === 'response.item.create');
+let transcriptSequence = 0;
+function transcript(f, role, delta, start = 10000) {
+  const event = { type: `session.${role}_transcript.delta`, event_id: `transcript_${++transcriptSequence}`, delta, start_ms: start, end_ms: start + 100 };
+  f.controller.event(event);
+  return event;
+}
+async function spokenPrompt(f) {
+  await flush();
+  const confirmation = f.controller.confirmation;
+  if (!confirmation || confirmation.stage !== 'instruction') return;
+  f.controller.event({ type: 'session.instructions.appended', client_event_id: confirmation.instructionId });
+  f.controller.outputActivity(true);
+  transcript(f, 'output', confirmation.prompt, 1000 + transcriptSequence * 100);
+  f.controller.outputActivity(false);
+  f.clock.tick(500);
+  await flush();
+}
+function participantReply(f, phrase = 'yes', quiet = 1000) {
+  f.controller.inputActivity(true, { available: true, quietSince: null, quietMs: 0 });
+  const event = transcript(f, 'input', phrase, Math.max(10000, (f.controller.confirmation?.outputEndMs ?? 0) + 100));
+  f.controller.inputActivity(false, { available: true, quietSince: f.clock.now(), quietMs: 0 });
+  f.clock.tick(quiet);
+  f.controller.inputActivity(false, { available: true, quietSince: f.clock.now() - quiet, quietMs: quiet });
+  f.clock.tick(0);
+  return event;
+}
+async function voiceApprove(f, phrase = 'yes') {
+  await spokenPrompt(f);
+  if (f.controller.confirmation?.stage !== 'armed') return;
+  participantReply(f, phrase);
+  await flush();
+}
 
 test('microphone starts unmuted and meeting starts wake-gated with input on', () => {
   const mic = fixture(), meeting = fixture({ source: 'meeting-tab' });
@@ -79,10 +127,10 @@ test('empty terminal output does not erase a pending issue approval', async () =
   assert.equal(f.requests.length, 0);
   assert.equal(f.controller.calls.get('write').status, 'approval');
   assert.equal(continuations(f).length, 0);
-  f.controller.approve('write'); f.controller.approve('write');
+  await voiceApprove(f); await voiceApprove(f);
   await flush();
   assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0].approved, true);
+  assert.equal('approved' in f.requests[0], false);
   assert.equal('approved' in f.requests[0].arguments, false);
   assert.equal(continuations(f).length, 1);
 });
@@ -123,7 +171,7 @@ test('a stop phrase spanning fragments wins over an earlier wake phrase', () => 
 test('stop rejects pending issue approval and prevents old backend work from continuing', async () => {
   const f = fixture();
   f.created(); f.call('write', 'create_issue', { title: 'Example', body: 'Details' }); f.completed();
-  f.controller.stop(); f.controller.approve('write'); f.controller.resume();
+  f.controller.stop(); await voiceApprove(f); f.controller.resume();
   await flush();
   assert.equal(f.requests.length, 0);
   assert.equal(f.controller.calls.get('write').status, 'rejected');
@@ -141,7 +189,7 @@ test('waiting meeting mode does not execute tools even if Live requests one', as
 test('ending while a write runs records uncertainty and discards late result commands', async () => {
   let resolve;
   const f = fixture({ execute: () => new Promise(done => { resolve = done; }) });
-  f.created(); f.call('write', 'create_issue', { title: 'Example', body: 'Details' }); f.completed(); f.controller.approve('write');
+  f.created(); f.call('write', 'create_issue', { title: 'Example', body: 'Details' }); f.completed(); await voiceApprove(f);
   f.controller.end();
   resolve({ call_id: 'write', output: '{"ok":true}' });
   await flush();
@@ -152,7 +200,7 @@ test('ending while a write runs records uncertainty and discards late result com
 
 test('read errors and uncertain writes are visible and returned to the backend', async () => {
   const f = fixture({ execute: async () => { throw new Error('Connection lost'); } });
-  f.created(); f.call('read'); f.call('write', 'create_issue', { title: 'Example', body: 'Details' }); f.completed(); f.controller.approve('write');
+  f.created(); f.call('read'); f.call('write', 'create_issue', { title: 'Example', body: 'Details' }); f.completed(); await voiceApprove(f);
   await flush();
   assert.equal(f.controller.calls.get('read').status, 'error');
   assert.equal(f.controller.calls.get('write').status, 'uncertain');
@@ -225,7 +273,7 @@ test('summary acknowledgment arriving after Stop cannot trigger more speech', ()
 
 test('structured uncertain GitHub errors remain uncertain in the UI', async () => {
   const f = fixture({ execute: async body => ({ call_id: body.call_id, output: '{"ok":false,"error":{"code":"call_pending","message":"Do not retry this write.","uncertain":true}}' }) });
-  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Details' }); f.completed(); f.controller.approve('write');
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Details' }); f.completed(); await voiceApprove(f);
   await flush();
   assert.equal(f.controller.calls.get('write').status, 'uncertain');
   assert.equal(f.controller.calls.get('write').message, 'Do not retry this write.');
@@ -241,7 +289,7 @@ test('Stop cancels an announced delegation before its first response group exist
   f.call('late_read');
   f.call('late_write', 'create_issue', { title: 'Stale issue', body: 'Do not execute.' });
   f.completed();
-  f.controller.approve('late_write');
+  await voiceApprove(f);
   await flush();
   assert.equal(f.requests.length, 0);
   assert.equal(f.controller.calls.get('late_read').status, 'rejected');
@@ -296,7 +344,7 @@ const changes = [
 ];
 
 for (const [name, args] of changes) {
-  test(`${name} requires exact application approval and executes once`, async () => {
+  test(`${name} requires an exact spoken proposal and approval and executes once`, async () => {
     const f = fixture({ capabilities: expandedCapabilities });
     f.created(); f.call('change', name, { ...args, approved: true }); f.completed();
     await flush();
@@ -309,10 +357,10 @@ for (const [name, args] of changes) {
     assert.ok(Object.isFrozen(proposed.arguments));
     assert.throws(() => { proposed.arguments.title = 'Different'; }, TypeError);
     if (proposed.arguments.labels) assert.throws(() => proposed.arguments.labels.push('unreviewed'), TypeError);
-    f.controller.approve('change'); f.controller.approve('change');
+    await voiceApprove(f); await voiceApprove(f);
     await flush();
     assert.equal(f.requests.length, 1);
-    assert.equal(f.requests[0].approved, true);
+    assert.equal('approved' in f.requests[0], false);
     assert.deepEqual(f.requests[0].arguments, args);
     assert.equal(continuations(f).length, 1);
   });
@@ -323,7 +371,7 @@ for (const [name, args] of changes) {
       f.created(); f.call('change', name, args); f.completed();
       if (end) f.controller.end();
       else { f.controller.stop(); f.controller.resume(); }
-      f.controller.approve('change');
+      await voiceApprove(f);
       await flush();
       assert.equal(f.requests.length, 0);
       assert.equal(f.controller.calls.get('change').status, 'rejected');
@@ -334,7 +382,7 @@ for (const [name, args] of changes) {
   test(`ending during ${name} keeps an uncertain receipt and ignores late completion`, async () => {
     let resolve;
     const f = fixture({ capabilities: expandedCapabilities, execute: () => new Promise(done => { resolve = done; }) });
-    f.created(); f.call('change', name, args); f.completed(); f.controller.approve('change');
+    f.created(); f.call('change', name, args); f.completed(); await voiceApprove(f);
     f.controller.end();
     resolve({ call_id: 'change', output: '{"ok":true}' });
     await flush();
@@ -380,9 +428,9 @@ test('malformed or contradictory capability metadata cannot start a controller',
 test('a stopped in-flight project write can confirm but cannot restart backend work', async () => {
   let resolve;
   const f = fixture({ capabilities: expandedCapabilities, execute: () => new Promise(done => { resolve = done; }) });
-  f.created(); f.call('change', 'update_project_item', changes[1][1]); f.completed(); f.controller.approve('change');
+  f.created(); f.call('change', 'update_project_item', changes[1][1]); f.completed(); await voiceApprove(f);
   f.controller.stop();
-  assert.match(f.controller.calls.get('change').message, /already approved/);
+  assert.match(f.controller.calls.get('change').message, /already being processed/);
   resolve({ call_id: 'change', output: '{"ok":true}' });
   await flush();
   assert.equal(f.controller.calls.get('change').status, 'complete');
@@ -392,9 +440,9 @@ test('a stopped in-flight project write can confirm but cannot restart backend w
 test('failed edit remains uncertain with no automatic retry', async () => {
   let count = 0;
   const f = fixture({ capabilities: expandedCapabilities, execute: async () => { ++count; throw new Error('Connection lost'); } });
-  f.created(); f.call('change', 'update_issue', changes[0][1]); f.completed(); f.controller.approve('change');
+  f.created(); f.call('change', 'update_issue', changes[0][1]); f.completed(); await voiceApprove(f);
   await flush();
-  f.controller.approve('change'); f.call('change', 'update_issue', changes[0][1]);
+  await voiceApprove(f); f.call('change', 'update_issue', changes[0][1]);
   await flush();
   assert.equal(count, 1);
   assert.equal(f.controller.calls.get('change').status, 'uncertain');
@@ -532,4 +580,238 @@ test('old silence timers cannot close a newly resumed request', () => {
   f.controller.end();
   clock.tick(100000);
   assert.equal(f.controller.active, false);
+});
+
+test('voice approval succeeds without a browser approval API or approving tool argument', async () => {
+  const f = fixture();
+  assert.equal(f.controller.approve, undefined);
+  f.created(); f.call('voice_only', 'create_issue', { title: 'Voice only', body: 'Approved in the meeting.', approved: true }); f.completed();
+  await voiceApprove(f, 'yes please');
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.approvalRequests.map(request => request.action), ['prepare', 'arm', 'voice']);
+  assert.equal('approved' in f.requests[0], false);
+  assert.equal('approved' in f.requests[0].arguments, false);
+  assert.equal(results(f).length, 1);
+  assert.equal(continuations(f).length, 1);
+});
+
+test('instruction acknowledgment alone and preexisting output cannot arm approval', async () => {
+  const f = fixture();
+  f.controller.outputActivity(true);
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await flush();
+  const confirmation = f.controller.confirmation;
+  f.controller.event({ type: 'session.instructions.appended', client_event_id: confirmation.instructionId });
+  transcript(f, 'output', confirmation.prompt);
+  f.controller.outputActivity(false);
+  f.clock.tick(5000); await flush();
+  assert.equal(f.approvalRequests.filter(request => request.action === 'arm').length, 0);
+  assert.equal(f.requests.length, 0);
+  f.controller.outputActivity(true); f.controller.outputActivity(false);
+  f.clock.tick(500); await flush();
+  assert.equal(f.controller.confirmation.stage, 'prompting');
+  transcript(f, 'output', confirmation.prompt, 11000);
+  f.clock.tick(500); await flush();
+  assert.equal(f.controller.confirmation.stage, 'armed');
+});
+
+test('earlier yes and Chatty output yes never approve a pending change', async () => {
+  const f = fixture();
+  transcript(f, 'input', 'yes', 100);
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await spokenPrompt(f);
+  transcript(f, 'output', 'Yes, I can do that.', 50000);
+  f.controller.inputActivity(false, { available: true, quietSince: 100, quietMs: 10000 });
+  f.clock.tick(10000); await flush();
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.approvalRequests.filter(request => request.action === 'voice').length, 0);
+});
+
+test('transcript yes without a genuine post-prompt input activity cycle cannot approve', async () => {
+  const f = fixture();
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await spokenPrompt(f);
+  transcript(f, 'input', 'yes', 100000);
+  f.controller.inputActivity(false, { available: true, quietSince: null, quietMs: 0 });
+  f.clock.tick(10000); await flush();
+  assert.equal(f.requests.length, 0);
+});
+
+test('partial yes followed by no is submitted as one unapproved utterance', async () => {
+  const f = fixture();
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await spokenPrompt(f);
+  f.controller.inputActivity(true, { available: true, quietSince: null, quietMs: 0 });
+  transcript(f, 'input', 'yes', 100000);
+  f.controller.inputActivity(false, { available: true, quietSince: 1, quietMs: 0 });
+  f.clock.tick(800);
+  f.controller.inputActivity(false, { available: true, quietSince: null, quietMs: 0 });
+  f.clock.tick(300);
+  assert.equal(f.requests.length, 0);
+  f.controller.inputActivity(true, { available: true, quietSince: null, quietMs: 0 });
+  transcript(f, 'input', ', no, wait', 100100);
+  f.controller.inputActivity(false, { available: true, quietSince: 1100, quietMs: 0 });
+  f.clock.tick(1000);
+  f.controller.inputActivity(false, { available: true, quietSince: 1100, quietMs: 1000 });
+  f.clock.tick(0); await flush();
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.controller.calls.get('write').status, 'rejected');
+  assert.equal(f.approvalRequests.find(request => request.action === 'voice').input_events.map(event => event.delta).join(''), 'yes, no, wait');
+  assert.equal(continuations(f).length, 1);
+});
+
+for (const phrase of ['no', 'cancel', 'yes but change the title']) {
+  test(`spoken ${JSON.stringify(phrase)} ends the proposal without executing it or retrying`, async () => {
+    const f = fixture();
+    f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+    await voiceApprove(f, phrase);
+    f.clock.tick(10000); await flush();
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.controller.calls.get('write').status, 'rejected');
+    assert.equal(results(f).length, 1);
+    assert.equal(continuations(f).length, 1);
+    assert.equal(f.approvalRequests.filter(request => request.action === 'prepare').length, 1);
+  });
+}
+
+test('queued mutations each need their own readback and fresh spoken approval', async () => {
+  const f = fixture();
+  f.created();
+  f.call('one', 'create_issue', { title: 'One', body: 'First exact action' });
+  f.call('two', 'create_issue', { title: 'Two', body: 'Second exact action' });
+  f.completed();
+  await voiceApprove(f);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].call_id, 'one');
+  assert.equal(f.controller.confirmation.call.call_id, 'two');
+  assert.equal(continuations(f).length, 0);
+  f.clock.tick(1000);
+  assert.equal(f.requests.length, 1);
+  await voiceApprove(f, 'go ahead');
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests[1].call_id, 'two');
+  assert.equal(results(f).length, 2);
+  assert.equal(continuations(f).length, 1);
+});
+
+test('duplicate input evidence and duplicate changed arguments never authorize a second write', async () => {
+  const f = fixture();
+  f.created(); f.call('write', 'create_issue', { title: 'Original', body: 'Original body' }); f.completed();
+  await spokenPrompt(f);
+  const event = participantReply(f);
+  f.controller.event(event);
+  f.call('write', 'create_issue', { title: 'Injected', body: 'Different body', approved: true });
+  await flush();
+  f.controller.event(event); f.completed();
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].arguments.title, 'Original');
+  assert.equal(results(f).length, 1);
+  assert.equal(continuations(f).length, 1);
+});
+
+test('Chatty stop invalidates an armed proposal and ignores late yes after resume', async () => {
+  const f = fixture({ source: 'meeting-tab' });
+  speak(f, 'Chatty create a test issue.');
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await spokenPrompt(f);
+  participantReply(f, 'Chatty stop');
+  await flush();
+  assert.equal(f.controller.speech, 'stopped');
+  assert.equal(f.muted.at(-1), true);
+  assert.equal(f.controller.calls.get('write').status, 'rejected');
+  f.controller.resume();
+  participantReply(f, 'yes'); await flush();
+  assert.equal(f.requests.length, 0);
+  assert.equal(continuations(f).length, 0);
+  assert.equal(f.approvalRequests.filter(request => request.action === 'cancel').length, 1);
+});
+
+test('proposal expiry invalidates old evidence and returns an outcome to Live', async () => {
+  const f = fixture();
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await spokenPrompt(f);
+  f.clock.tick(60000); await flush();
+  participantReply(f); await flush();
+  assert.equal(f.requests.length, 0);
+  assert.match(f.controller.calls.get('write').message, /expired/);
+  assert.equal(continuations(f).length, 1);
+  assert.equal(f.approvalRequests.filter(request => request.action === 'cancel').length, 1);
+});
+
+test('immediate post-prompt speech survives delayed server arming but cannot execute before it', async () => {
+  const f = fixture();
+  const original = f.controller.approvalRequest;
+  let resolveArm;
+  f.controller.approvalRequest = (action, body) => action === 'arm' ? new Promise(resolve => { resolveArm = resolve; }) : original(action, body);
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await flush();
+  const confirmation = f.controller.confirmation;
+  f.controller.event({ type: 'session.instructions.appended', client_event_id: confirmation.instructionId });
+  f.controller.outputActivity(true); transcript(f, 'output', confirmation.prompt, 1000); f.controller.outputActivity(false);
+  participantReply(f, 'yes');
+  assert.equal(confirmation.stage, 'arming');
+  assert.equal(f.requests.length, 0);
+  resolveArm({ armed: true }); await flush();
+  f.clock.tick(0); await flush();
+  assert.equal(f.requests.length, 1);
+});
+
+test('speech overlapping the proposal cannot become a later approval', async () => {
+  const f = fixture();
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await flush();
+  const confirmation = f.controller.confirmation;
+  f.controller.event({ type: 'session.instructions.appended', client_event_id: confirmation.instructionId });
+  f.controller.outputActivity(true); transcript(f, 'output', confirmation.prompt, 1000);
+  f.controller.inputActivity(true, { available: true, quietSince: null, quietMs: 0 });
+  transcript(f, 'input', 'yes', 900);
+  f.controller.outputActivity(false); f.clock.tick(500); await flush();
+  f.controller.inputActivity(false, { available: true, quietSince: 1, quietMs: 2000 });
+  f.clock.tick(1000); await flush();
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.approvalRequests.filter(request => request.action === 'voice').length, 0);
+});
+
+test('unavailable audio and a fresh unqualified onset invalidate quiet approval evidence', async () => {
+  const f = fixture();
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await spokenPrompt(f);
+  participantReply(f, 'yes', 800);
+  f.controller.inputActivity(false, { available: true, quietSince: null, quietMs: 0 });
+  f.clock.tick(2000); await flush();
+  assert.equal(f.requests.length, 0);
+  f.controller.inputActivity(false, { available: false, quietSince: null, quietMs: 0 });
+  f.controller.inputActivity(false, { available: true, quietSince: 1, quietMs: 2000 });
+  f.clock.tick(0); await flush();
+  assert.equal(f.requests.length, 0);
+});
+
+test('meeting confirmation accepts a bare yes then waits for one final audible result', async () => {
+  const f = fixture({ source: 'meeting-tab' });
+  speak(f, 'Chatty create an issue.');
+  f.created(); f.call('write', 'create_issue', { title: 'Test', body: 'Body' }); f.completed();
+  await voiceApprove(f, 'yes');
+  assert.equal(f.requests.length, 1);
+  f.clock.tick(2000);
+  assert.equal(f.controller.speech, 'listening');
+  f.created('final_response'); f.completed('final_response');
+  f.controller.outputActivity(true); f.controller.outputActivity(false);
+  f.clock.tick(1500);
+  assert.equal(f.controller.speech, 'waiting');
+});
+
+
+test('audio monotonic timestamps and Live media timestamps are not compared with the wall clock', async () => {
+  const clock = clockFixture();
+  const f = fixture({ timers: clock.timers, now: () => 1900000000000 + clock.now(), tick: clock.tick });
+  f.created(); f.call('write', 'create_issue', { title: 'Clock domains', body: 'Body' }); f.completed();
+  await spokenPrompt(f);
+  f.controller.inputActivity(true, { available: true, observedAt: 17, lastActiveAt: 17, quietSince: null, quietMs: 0 });
+  transcript(f, 'input', 'yes', 100000);
+  f.controller.inputActivity(false, { available: true, observedAt: 300, lastActiveAt: 40, quietSince: 50, quietMs: 250 });
+  clock.tick(1000);
+  f.controller.inputActivity(false, { available: true, observedAt: 1300, lastActiveAt: 40, quietSince: 50, quietMs: 1250 });
+  clock.tick(0); await flush();
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.approvalRequests.find(request => request.action === 'voice').quiet_ms, 1250);
 });

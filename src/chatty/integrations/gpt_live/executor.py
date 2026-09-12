@@ -211,6 +211,34 @@ class ToolExecutor:
             _vision_runner=describe,
         )
 
+    def cancel_write(self, session_id, call_id, name, arguments, message):
+        """Retain a terminal denial for an unstarted, already reserved write."""
+        fingerprint = json.dumps([name, arguments], sort_keys=True, allow_nan=False)
+        with self.lock:
+            session = self.sessions.get(session_id)
+            call = session.calls.get(call_id) if session else None
+            if call is None or call.fingerprint != fingerprint:
+                raise ExecutorError(409, "call_conflict", "The pending action changed.")
+            if not call.started:
+                call.started = True
+                call.result.set_result(
+                    {
+                        "call_id": call_id,
+                        "output": json.dumps(
+                            {
+                                "ok": False,
+                                "error": {
+                                    "code": "approval_canceled",
+                                    "message": message,
+                                    "uncertain": False,
+                                    "retryable": False,
+                                },
+                            }
+                        ),
+                    }
+                )
+        return call.result.result(timeout=self.settings.duplicate_wait_seconds)
+
     def execute(
         self,
         session_id: str,
@@ -259,7 +287,7 @@ class ToolExecutor:
                 session.calls[call_id] = call  # Reserve BEFORE any side effect.
             if name in WRITE_TOOL_NAMES and not approved and not call.started:
                 # Bind the exact proposed payload but do not cache a final denial:
-                # the human may approve this same call after reviewing it in UI.
+                # the voice-approval manager may authorize this exact saved call.
                 return {
                     "call_id": call_id,
                     "output": json.dumps(
@@ -267,7 +295,7 @@ class ToolExecutor:
                             "ok": False,
                             "error": {
                                 "code": "authorization_required",
-                                "message": "Review the exact proposed change and target, then click Approve change.",
+                                "message": "Chatty must describe this change and receive a fresh spoken confirmation before applying it.",
                                 "uncertain": False,
                             },
                         }

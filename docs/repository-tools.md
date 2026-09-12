@@ -4,8 +4,9 @@ The expanded tool module fixes every GitHub API endpoint to `vaishnavJa/Chatty`.
 It uses the existing `gh` login and does not read, create, print, or change tokens.
 No dependencies were added.
 
-The app must send every name in `WRITE_TOOLS` through its concrete approval UI
-and durable `execute_call` ledger. `execute()` is a low-level internal boundary,
+The app must send every name in `WRITE_TOOLS` through its saved proposal and
+[spoken approval protocol](voice-approval.md), then the durable `execute_call`
+ledger. No browser approval click is required. `execute()` is a low-level internal boundary,
 not an alternative authorized dispatcher. Do not retry an uncertain mutation with
 a new call ID. Timeout, invalid JSON, and unconfirmed successful mutation
 responses are classified as uncertain; definitive GitHub 4xx rejections are not.

@@ -2,6 +2,11 @@ const ICE_TIMEOUT_MS = 10_000;
 const START_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 5_000;
 const DISCONNECT_TIMEOUT_MS = 5_000;
+const INPUT_SAMPLE_MS = 50;
+const INPUT_START_MS = 150;
+const INPUT_END_MS = 250;
+const INPUT_START_RMS = 0.015;
+const INPUT_HOLD_RMS = 0.008;
 
 function waitForIce(peer, signal) {
   return new Promise((resolve, reject) => {
@@ -28,8 +33,11 @@ function waitForIce(peer, signal) {
  * Open a browser Live connection through Chatty's same-origin backend.
  * Owns the supplied stream until close/failure. Does not execute tools.
  * onState(state, details): see docs/meeting-setup.md for the callback contract.
+ * onInputActivity(active, details) is a local RMS heuristic, not speaker identity
+ * or an authoritative turn-end event. Timestamps use performance.now(). Initial
+ * quiet has no evidence: lastActiveAt/quietSince are null and quietMs is zero.
  */
-export async function connectLive({ stream, onEvent = () => {}, onState = () => {}, onOutputActivity, signal, outputDeviceId = "" }) {
+export async function connectLive({ stream, onEvent = () => {}, onState = () => {}, onOutputActivity, onInputActivity, signal, outputDeviceId = "" }) {
   const inputTracks = stream?.getAudioTracks() ?? [];
   if (!inputTracks.some((track) => track.readyState === "live")) {
     stream?.getTracks().forEach((track) => track.stop());
@@ -53,6 +61,16 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
   let activitySource;
   let activityTimer;
   let outputActive = false;
+  let inputContext;
+  let inputSource;
+  let inputAnalyser;
+  let inputTimer;
+  let inputActive = false;
+  let inputCandidateSince = null;
+  let inputLastActiveAt = null;
+  let inputQuietSince = null;
+  let inputUnavailableReason;
+  const inputListeners = [];
   const pending = new AbortController();
   const remoteTracks = new Set();
   const listeners = [];
@@ -74,6 +92,7 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
   }
   function setInputEnabled(enabled) {
     for (const track of inputTracks) track.enabled = Boolean(enabled) && !closing && !disposed;
+    if (!enabled || closing || disposed) invalidateInputActivity("input-disabled");
   }
   function playOutput() {
     if (!audio?.srcObject || closing || disposed || audio.muted) return;
@@ -155,6 +174,107 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
       state("output-activity-unavailable", { message: "Automatic reply silence detection is unavailable; use Stop speaking." });
     }
   }
+  function reportInputActivity(available, reason, observedAt = performance.now()) {
+    onInputActivity?.(inputActive, {
+      available, observedAt, lastActiveAt: inputLastActiveAt,
+      quietSince: inputQuietSince,
+      quietMs: !inputActive && inputQuietSince !== null ? Math.max(0, observedAt - inputQuietSince) : 0,
+      reason,
+    });
+  }
+  function invalidateInputActivity(reason) {
+    inputActive = false;
+    inputCandidateSince = null;
+    inputLastActiveAt = null;
+    inputQuietSince = null;
+    if (inputUnavailableReason !== reason) {
+      inputUnavailableReason = reason;
+      reportInputActivity(false, reason);
+    }
+  }
+  function stopInputActivity(reason) {
+    clearInterval(inputTimer);
+    inputTimer = undefined;
+    for (const remove of inputListeners.splice(0)) remove();
+    inputSource?.disconnect();
+    inputAnalyser?.disconnect();
+    inputSource = undefined;
+    inputAnalyser = undefined;
+    inputContext?.close().catch(() => {});
+    inputContext = undefined;
+    invalidateInputActivity(reason);
+  }
+  function observeInputActivity() {
+    if (!onInputActivity) return;
+    try {
+      inputContext = new AudioContext();
+      inputAnalyser = inputContext.createAnalyser();
+      inputAnalyser.fftSize = 512;
+      const samples = new Float32Array(inputAnalyser.fftSize);
+      // Only the supplied capture is observed. Never connect remote Chatty audio
+      // or a speaker destination, and never retain or send these local samples.
+      inputSource = inputContext.createMediaStreamSource(new MediaStream(inputTracks));
+      inputSource.connect(inputAnalyser);
+      const sampleInput = () => {
+        if (disposed || closing) return;
+        if (inputTracks.some((track) => track.readyState !== "live" || !track.enabled || track.muted)) {
+          invalidateInputActivity("input-unavailable");
+          return;
+        }
+        if (inputContext.state !== "running") {
+          invalidateInputActivity("context-not-running");
+          return;
+        }
+        try {
+          inputAnalyser.getFloatTimeDomainData(samples);
+          const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
+          if (!Number.isFinite(rms)) throw new Error("Invalid input audio samples.");
+          const now = performance.now();
+          inputUnavailableReason = undefined;
+          if (rms >= (inputActive ? INPUT_HOLD_RMS : INPUT_START_RMS)) {
+            inputQuietSince = null;
+            inputCandidateSince ??= now;
+            if (inputActive || now - inputCandidateSince >= INPUT_START_MS) {
+              inputActive = true;
+              inputLastActiveAt = now;
+            }
+          } else {
+            inputCandidateSince = null;
+            if (inputLastActiveAt !== null) {
+              inputQuietSince ??= now;
+              if (now - inputQuietSince >= INPUT_END_MS) inputActive = false;
+            }
+          }
+          reportInputActivity(true, inputActive ? "speech" : inputQuietSince === null ? "waiting-for-input" : "quiet", now);
+        } catch {
+          stopInputActivity("detector-failed");
+          state("input-activity-unavailable", { message: "Input activity detection failed; voice approval is unavailable." });
+        }
+      };
+      const context = inputContext;
+      const contextChanged = () => {
+        if (inputContext?.state !== "running") invalidateInputActivity("context-not-running");
+      };
+      context.addEventListener("statechange", contextChanged);
+      inputListeners.push(() => context.removeEventListener("statechange", contextChanged));
+      for (const track of inputTracks) {
+        const muted = () => invalidateInputActivity("input-muted");
+        track.addEventListener("mute", muted);
+        inputListeners.push(() => track.removeEventListener("mute", muted));
+      }
+      inputTimer = setInterval(sampleInput, INPUT_SAMPLE_MS);
+      sampleInput();
+      if (inputContext?.state === "suspended") {
+        // A failed or pending resume cannot manufacture a quiet approval window.
+        inputContext.resume().catch(() => {
+          if (!disposed && !closing) invalidateInputActivity("context-resume-failed");
+        });
+      }
+    } catch {
+      stopInputActivity("detector-unavailable");
+      state("input-activity-unavailable", { message: "Input activity detection is unavailable; voice approval is unavailable." });
+    }
+  }
   function cleanup(result) {
     if (disposed) return;
     disposed = true;
@@ -162,6 +282,7 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     clearTimeout(startTimer);
     clearTimeout(closeTimer);
     clearTimeout(disconnectTimer);
+    stopInputActivity("closed");
     clearInterval(activityTimer);
     activitySource?.disconnect();
     activityContext?.close().catch(() => {});
@@ -192,6 +313,7 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     closing = true;
     setOutputMuted(true);
     setInputEnabled(false);
+    stopInputActivity("closing");
     clearTimeout(disconnectTimer);
     state("closing");
     if (!ready || channel?.readyState !== "open") {
@@ -246,6 +368,7 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
       });
       peer.addTrack(track, stream);
     }
+    observeInputActivity();
     listen(stream, "inactive", close);
     listen(peer, "track", ({ track }) => {
       if (disposed) { track.stop(); return; }

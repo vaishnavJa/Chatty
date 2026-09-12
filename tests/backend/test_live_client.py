@@ -19,6 +19,20 @@ def test_live_payload_and_public_response(settings, schemas):
         assert delegation["responses"]["model"] == settings.backend_model
         assert delegation["responses"]["tools"] == schemas
         assert "explicit spoken request" in delegation["responses"]["instructions"]
+        assert delegation["responses"]["parallel_tool_calls"] is False
+        for instructions in (
+            payload["session"]["instructions"],
+            delegation["responses"]["instructions"],
+        ):
+            assert "A mutation tool call proposes a change" in instructions
+            assert "Do not collect approval yourself before" in instructions
+            assert "Do you approve this change?" in instructions
+            assert "exact approval in the browser UI" not in instructions
+            assert "must await exact browser UI approval" not in instructions
+        assert (
+            "Never add approval fields to tool arguments"
+            in (delegation["responses"]["instructions"])
+        )
         return httpx.Response(
             201,
             json={

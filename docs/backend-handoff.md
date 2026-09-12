@@ -60,15 +60,23 @@ POST /api/tools/execute
 Content-Type: application/json
 Origin: http://localhost:3000
 
-{"session_id":"<connection.sessionId>","call_id":"<original call_id>","name":"create_issue","arguments":{"title":"<title>","body":"<body>"},"approved":true}
+{"session_id":"<connection.sessionId>","call_id":"<original call_id>","name":"list_open_issues","arguments":{}}
 ```
 
 `arguments` is a **parsed JSON object**, following the tool owner's published
 schema. Do not forward the raw arguments JSON string or add authorization fields
-inside it. Set top-level `approved: true` only after the human reviews the exact
-title/body and clicks Create issue. Reads retain the four-field interface.
-An unapproved write returns `authorization_required` without executing; the same
-bound call can subsequently be approved with unchanged name and arguments.
+inside it. Reads use this four-field interface. All mutation tools instead enter
+the application's [spoken approval protocol](voice-approval.md): prepare the exact
+call through `/api/approvals/prepare`, speak the returned proposal, arm it with
+completed playback evidence, and submit the fresh spoken answer to
+`/api/approvals/voice`. No browser approval click is needed. The server returns the
+original call's receipt after approval, rejection, ambiguity or expiry.
+
+The legacy top-level `approved: true` on `/api/tools/execute` is not authority to
+write. A direct write returns `authorization_required` without executing. Only the
+approval manager can execute its saved payload after voice confirmation. The
+model proposes concrete arguments immediately once the request is clear; the
+application owns the spoken approval question so the model must not ask it twice.
 
 Success or a completed tool-level failure: **200**, always the same outer shape:
 
@@ -94,9 +102,10 @@ An unexpected tool exception produces a cached 200 receipt whose output is:
 {"ok":false,"error":{"code":"tool_execution_failed","message":"The tool did not return a confirmed result. Check GitHub before requesting the action again.","retryable":false}}
 ```
 
-Stop must mute locally even while HTTP is pending. It does not undo or cancel a
-running GitHub call. Preserve its receipt, and do not re-arm speech just because a
-tool completed. The backend's initial voice prompt starts silently and instructs
+Stop must mute locally even while HTTP is pending and cancel an unexecuted voice
+proposal through `/api/approvals/cancel`. It does not undo or cancel a running
+GitHub call. Preserve its receipt, and do not re-arm speech just because a tool
+completed. The backend's initial voice prompt starts silently and instructs
 Chatty to respond to its name; the UI still owns enforceable wake/playback policy.
 
 ## GitHub owner: module contract
@@ -109,8 +118,8 @@ offline fixtures only.
 
 Schemas use `{type:'function',name,description,parameters,strict?}` with object
 parameters. They are inserted unchanged under
-`session.delegation.responses.tools`. The allowed names are:
-`list_recent_commits`, `list_open_pull_requests`, `list_open_issues`, `create_issue`.
+`session.delegation.responses.tools`. The current 33-tool registry and its 17
+mutations are listed in [capabilities.md](capabilities.md).
 The server validates arguments using those schemas before calling the module.
 The module must enforce repository scope and its own bounded remote-operation
 timeouts; it must not retry an uncertain write automatically.
@@ -137,12 +146,14 @@ Origin, JSON, and a body of at most 64 KiB. No cross-origin CORS or LAN binding.
 These checks prevent browser cross-site writes; they do not authenticate the
 local machine's owner. Do not tunnel or reverse-proxy this demo onto the internet.
 
-The optional top-level approval boolean is supplied by the trusted browser's
-human review button, never by model arguments. The backend cannot independently
-attest that a request was spoken; the operator must review the issue payload.
-Voice/backend prompts require an explicit request, and the GitHub module treats
-repository text as data. This is a local trusted-operator demo. See
-`docs/local-demo.md` for the complete approval and replay contract.
+The same-origin browser relays original Live transcript events and measured audio
+activity for the saved proposal and fresh voiced answer. The server validates
+this evidence and consumes the proposal once. It does not independently attest
+speaker identity, acoustic origin or complete speech turns. Live has no
+authoritative transcript-turn-done event, so input quiet and settled captions are
+heuristics. Voice/backend prompts require an explicit request, and the GitHub
+module treats repository text as data. This is a local trusted-operator demo. See
+[voice-approval.md](voice-approval.md) for the full approval and replay contract.
 
 ## Verification
 

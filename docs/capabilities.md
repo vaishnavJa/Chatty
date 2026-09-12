@@ -5,7 +5,7 @@ server-configured GitHub Project. The current registry contains 33 typed tools:
 16 reads and 17 mutations. It does not expose a shell, arbitrary API requests,
 repository switching, permission administration, or project visibility changes.
 
-| Area | Read tools | Mutations requiring exact UI approval |
+| Area | Read tools | Mutations requiring spoken approval |
 | --- | --- | --- |
 | Repository | `get_repository`, `list_recent_commits` | — |
 | Issues and discussion | `list_open_issues`, `get_issue`, `list_issue_comments` | `create_issue`, `update_issue`, `add_issue_comment`, `update_issue_comment` |
@@ -23,10 +23,21 @@ one addressed request and then return to quiet listening. **Chatty, stop** stops
 speaking and requesting work. The voice instructions define this conversational
 behavior; they do not establish a guaranteed model response boundary.
 
-Repository facts come from current tool results. Mutations become concrete approval
-requests in the browser, including the operation and exact arguments. A spoken
-request alone does not approve execution. Chatty reports completion only after a
-tool receipt confirms the result, and does not read long source URLs aloud.
+Repository facts come from current tool results. A requested mutation becomes a
+saved proposal. Chatty describes the operation, target and supplied fields aloud,
+then asks “Do you approve this change?” Answer **yes** or **Chatty confirm** after
+the question, or **no**, **Chatty cancel**, or **Chatty, stop** to cancel. No approval
+click is required. This follow-up is part of the same addressed request; a pending
+answer needs no new wake word. There is only one pending proposal at a time.
+
+The server binds approval to that proposal's session, call ID and exact arguments.
+An amended or unclear answer cancels it; a revised change requires a new proposal.
+Proposals expire after 90 seconds. Long drafts are identified by their length
+rather than read in full; saying yes approves the complete saved draft. The app
+retains its full text for optional inspection. Ask for a smaller change if every
+word needs to be read aloud. Chatty reports completion only after a tool receipt
+confirms it, and does not read long source URLs aloud. See
+[voice-approval.md](voice-approval.md) for the protocol and its limits.
 
 The connected GitHub account has write access, not administrator access. GitHub
 permissions and branch protections still apply. Errors and unsupported operations

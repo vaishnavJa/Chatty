@@ -59,3 +59,10 @@ Environment variable loading is not implemented yet. `.env` is excluded from Git
 4. Integrate Slack, Google Drive, Google Chat, Jira, Teams, and Confluence.
 5. Select an Internet Search API and include source URLs in conversation responses.
 6. Require user confirmation before sending data to or updating external services.
+
+## Demo video
+
+The English ten-second Remotion intro and meeting-recording edit are in
+[`demo-video/`](demo-video/README.md). Render the intro there with
+`npm run render:intro`, or add a recording with
+`npm run render:demo -- "C:/recordings/meeting.mp4"` after installing dependencies.

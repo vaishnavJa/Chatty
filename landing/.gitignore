@@ -1,0 +1,6 @@
+# The static website is source, even though the Python repository ignores dist/.
+!dist/
+!dist/**
+
+.vercel/
+.vercel

@@ -11,6 +11,12 @@
   Built at an <a href="https://aitinkerers.org/">AI Tinkerers</a> event.
 </p>
 
+<p align="center">
+  <a href="https://aitinkerers.org/">
+    <img src="landing/dist/assets/ai-tinkerers.png" width="220" alt="AI Tinkerers">
+  </a>
+</p>
+
 [![Meet Chatty — Your AI meeting companion. Keep the conversation moving.](landing/dist/assets/chatty-poster.jpg)](landing/dist/assets/chatty-intro.mp4)
 
 <p align="center">

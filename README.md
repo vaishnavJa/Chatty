@@ -15,6 +15,7 @@ GitHub tools are implemented; the complete meeting experience is still in develo
 [![Chatty introduction](landing/dist/assets/chatty-poster.jpg)](landing/dist/assets/chatty-intro.mp4)
 
 <p align="center">
+  <a href="https://meetchatty.vercel.app/"><strong>Visit website ↗</strong></a> ·
   <a href="landing/dist/assets/chatty-intro.mp4">Watch the intro</a> ·
   <a href="src/chatty/integrations/github/README.md">Technical details</a>
 </p>

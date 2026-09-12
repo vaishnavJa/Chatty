@@ -33,6 +33,7 @@ STATIC_EXTENSIONS = {
     ".webp",
     ".woff",
     ".woff2",
+    ".wav",
 }
 
 
@@ -171,6 +172,7 @@ class ChattyApp:
                 "quiet_ms",
             },
             "cancel": {"session_id"},
+            "interrupt": {"session_id", "approval_id"},
         }
         required = fields[action]
         optional = {"approval_id"} if action == "cancel" else set()
@@ -207,6 +209,8 @@ class ChattyApp:
                 body["speech_finished"],
                 body["quiet_ms"],
             )
+        if action == "interrupt":
+            return self.approvals.interrupt(session_id, approval_id)
         return self.approvals.cancel(session_id, approval_id)
 
     def analyze_vision(self, body: dict) -> dict:
@@ -413,6 +417,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/approvals/arm",
                 "/api/approvals/voice",
                 "/api/approvals/cancel",
+                "/api/approvals/interrupt",
             }:
                 raise ExecutorError(404, "not_found", "Unknown endpoint.")
             body = self.read_body(
@@ -472,6 +477,7 @@ class Handler(BaseHTTPRequestHandler):
                 not target.is_relative_to(root)
                 or not target.is_file()
                 or target.suffix.lower() not in STATIC_EXTENSIONS
+                or (target.suffix.lower() == ".wav" and relative != "okay.wav")
             ):
                 raise ExecutorError(404, "not_found", "File not found.")
             content_type = (
@@ -479,6 +485,8 @@ class Handler(BaseHTTPRequestHandler):
                 if target.suffix == ".js"
                 else mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             )
+            if relative == "okay.wav":
+                content_type = "audio/wav"
             self.reply(200, target.read_bytes(), content_type)
         except (ValueError, OSError):
             self.failure(ExecutorError(404, "not_found", "File not found."))

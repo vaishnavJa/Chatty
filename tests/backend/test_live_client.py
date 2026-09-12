@@ -24,11 +24,21 @@ def test_live_payload_and_public_response(settings, schemas):
             payload["session"]["instructions"],
             delegation["responses"]["instructions"],
         ):
+            instructions = " ".join(instructions.split())
             assert "A mutation tool call proposes a change" in instructions
             assert "Do not collect approval yourself before" in instructions
-            assert "Do you approve this change?" in instructions
+            assert "Follow-up questions and commands do not need" in instructions
+            assert "An unclear answer" in instructions
+            assert "do not recite" in instructions.lower()
+            assert "short, natural summary" in instructions
+            assert "one addressed request, then return to quiet" not in instructions
             assert "exact approval in the browser UI" not in instructions
             assert "must await exact browser UI approval" not in instructions
+        voice_instructions = payload["session"]["instructions"]
+        assert "The application mutes your output and plays one brief 'Okay'" in (
+            " ".join(voice_instructions.split())
+        )
+        assert "Input remains open" in voice_instructions
         assert (
             "Never add approval fields to tool arguments"
             in (delegation["responses"]["instructions"])

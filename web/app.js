@@ -73,7 +73,7 @@ function renderStatus() {
   controls.devices.textContent = loadingDevices ? 'Enabling devices…' : 'Enable audio devices';
   controls.vision.disabled = !meeting || (busy && !current?.vision);
   $('output-help').textContent = meeting ? 'Choose a virtual audio device, then use the same device as your unmuted Meet microphone. Keep Meet speakers on normal speakers or headphones.' : 'Microphone tests play through the selected output.';
-  if (current?.outputActivityAvailable === false) $('output-help').textContent += ' Answer-end detection is unavailable: use Stop speaking; each wake expires after 90 seconds.';
+  if (current?.outputActivityAvailable === false) $('output-help').textContent += ' Voice approval needs spoken-proposal detection; reconnect if a proposal cannot be heard.';
   const visionStates = { ready: 'Screen context enabled. A snapshot is sent only for a screen question.', analyzing: 'Reading the requested meeting snapshot…', unavailable: 'The incoming screen source is unavailable.', off: 'Screen context is off.' };
   $('screen-context-status').textContent = current?.vision ? visionStates[current.visionState] ?? 'Preparing incoming screen context…' : controls.vision.checked ? 'A single current snapshot will be sent only when you ask about the screen.' : 'Off. Enable before starting a meeting session. One snapshot is sent only when you ask about the screen.';
   controls.source.disabled = busy;
@@ -94,9 +94,9 @@ function renderStatus() {
   let input = 'Microphone off';
   if (busy) {
     title = phase === 'capturing' ? 'Choose what Chatty hears.' : phase === 'connecting' ? 'Making the connection.' : 'Listening to the conversation.';
-    description = phase === 'capturing' ? 'Allow microphone access, or select the meeting tab with audio.' : phase === 'connecting' ? 'Connecting your audio to OpenAI Live.' : 'Ask about your project or request an action.';
+    description = phase === 'capturing' ? 'Allow microphone access, or select the meeting tab with audio.' : phase === 'connecting' ? 'Connecting your audio to OpenAI Live.' : 'Ask questions and follow up naturally. Say “Chatty, stop” when you’re finished.';
     input = ready ? `${current.source === 'microphone' ? 'Microphone' : 'Meeting tab'} on · replies enabled` : 'Preparing audio';
-    if (ready && speech === 'waiting') { title = 'Listening for “Chatty”.'; description = 'Wake Chatty when you need project context or an action.'; input = 'Meeting audio on · replies muted'; }
+    if (ready && speech === 'waiting') { title = 'Listening for “Chatty”.'; description = 'Say Chatty once to start a conversation. Follow-up requests stay active until Chatty stop.'; input = 'Meeting audio on · replies muted'; }
     if (ready && speech === 'stopped') { title = 'Quiet, until you need me.'; description = 'Say “Chatty” or click Resume to hear replies again.'; input = 'Input on · replies muted'; }
     if (phase === 'reconnecting') { title = 'Reconnecting…'; description = 'The audio connection was interrupted.'; input = 'Connection interrupted'; }
   } else if (phase === 'error') { title = 'Let’s reconnect.'; description = 'Check the error above, then start a new session.'; }
@@ -195,13 +195,15 @@ async function postJson(path, body, signal) {
   const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!response.ok) {
     let message = `Tool request failed (HTTP ${response.status}).`;
+    let code;
     try {
       const data = await response.json();
+      code = data.code;
       if (typeof data.error === 'string') message = data.error;
       else if (typeof data.error?.message === 'string') message = data.error.message;
       else if (typeof data.detail === 'string') message = data.detail;
     } catch { /* Keep the HTTP status if the error body isn't JSON. */ }
-    throw new Error(message);
+    throw Object.assign(new Error(message), { code, status: response.status });
   }
   return response.json();
 }

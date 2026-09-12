@@ -150,16 +150,20 @@ export function browser() {
     }
     close() { this.closed = true; this.change("closed"); }
   }
-  class Output {
+  class Output extends EventTarget {
     muted = false;
     plays = 0;
     pauses = 0;
     rejectPlayback = false;
     sinkId = "";
     sinks = [];
-    constructor() { audios.push(this); }
+    src = "";
+    loads = 0;
+    constructor() { super(); audios.push(this); }
     async play() { this.plays++; if (this.rejectPlayback) throw new Error("Autoplay denied."); }
     pause() { this.pauses++; }
+    load() { this.loads++; }
+    removeAttribute(name) { if (name === "src") this.src = ""; }
     async setSinkId(deviceId) { this.sinks.push(deviceId); this.sinkId = deviceId; }
   }
   const environment = {

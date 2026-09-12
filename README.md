@@ -1,35 +1,35 @@
 # Agent Hub
 
-外部サービスの情報を参照しながらエージェントと会話するサービスの空のひな形です。
-プロジェクト名は仮に `agent-hub` としています。
+An empty scaffold for a conversational agent service that uses information from external services.
+The working project name is `agent-hub`.
 
-## 開発を始める
+## Getting started
 
 ```sh
 uv sync --locked
 uv run agent-hub
 ```
 
-Python 3.12、uv、Ruff を使用します。起動コマンドは準備完了メッセージを表示して終了します。
-Webサーバーや画面はまだありません。
+The project uses Python 3.12 or later, uv, and Ruff. The entry point prints a readiness message and exits.
+There is no web server or user interface yet.
 
-## 開発チェック
+## Development checks
 
 ```sh
 uv run ruff check .
 uv run ruff format --check .
 ```
 
-整形を適用する場合は `uv run ruff format .` を実行します。
+Run `uv run ruff format .` to apply formatting.
 
-## 構成
+## Project structure
 
 ```text
 src/agent_hub/
-├── __main__.py          # 動作確認用エントリーポイント
-├── conversations/      # 会話・メッセージ・セッション
-├── agents/             # エージェントの実行とツール呼び出し
-└── integrations/       # サービスごとの接続処理
+├── __main__.py          # Smoke-check entry point
+├── conversations/      # Conversations, messages, and sessions
+├── agents/             # Agent execution and tool calls
+└── integrations/       # Service-specific integrations
     ├── gpt_live/
     ├── slack/
     ├── google_drive/
@@ -40,22 +40,22 @@ src/agent_hub/
     └── internet_search/
 ```
 
-各パッケージは配置場所だけを用意した状態です。
-認証、API呼び出し、会話保存、エージェント実行は未実装です。
-GPT-Liveの具体的なサービス・APIは実装時に確定します。
+Each package is currently a placeholder.
+Authentication, API calls, conversation persistence, and agent execution are not implemented.
+The specific GPT-Live service and API will be selected during implementation.
 
-Teams、Confluence、Internet Searchも接続用パッケージの配置のみです。
-実際のサービス接続やインターネット検索はまだ実行できません。
-Internet Searchの提供元・APIは実装時に確定し、検索結果のタイトル・URL・要約を
-エージェントが参照できるようにする予定です。
+The Teams, Confluence, and Internet Search packages are also placeholders.
+Service connections and internet searches cannot be performed yet.
+The Internet Search provider and API will be selected during implementation.
+The agent is intended to access search result titles, URLs, and summaries.
 
-現時点では環境変数の読み込み処理はありません。`.env` はGit管理対象外です。
+Environment variable loading is not implemented yet. `.env` is excluded from Git.
 
-## 次に実装すること
+## Next implementation steps
 
-1. 会話UIとバックエンドAPIの方式を決める。
-2. GPT-Liveの接続仕様を確定し、最初のエージェント会話を実装する。
-3. ユーザー認証と接続情報の保管方法を実装する。
-4. Slack、Google Drive、Google Chat、Jira、Teams、Confluenceを接続する。
-5. Internet Searchの検索APIを選定し、検索結果の出典URLを会話で提示する。
-6. 外部への送信・更新は、ユーザーの確認を経て実行する設計にする。
+1. Choose the conversation UI and backend API architecture.
+2. Define the GPT-Live integration and implement the first agent conversation.
+3. Implement user authentication and connection credential storage.
+4. Integrate Slack, Google Drive, Google Chat, Jira, Teams, and Confluence.
+5. Select an Internet Search API and include source URLs in conversation responses.
+6. Require user confirmation before sending data to or updating external services.

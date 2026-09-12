@@ -1,8 +1,6 @@
-<p align="center">
-  <img src="landing/dist/assets/chatty-mark.svg" width="72" alt="Chatty logo">
-</p>
-
-<h1 align="center">Meet Chatty.</h1>
+<h1 align="center">
+  <img src="landing/dist/assets/chatty-mark.svg" width="48" height="48" align="middle" alt="Chatty logo">&nbsp; Meet Chatty.
+</h1>
 
 <p align="center">
   <strong>Less searching. More conversation.</strong><br>

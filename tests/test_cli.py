@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from agent_hub.__main__ import run
+from chatty.__main__ import run
 
 
 @pytest.mark.parametrize(

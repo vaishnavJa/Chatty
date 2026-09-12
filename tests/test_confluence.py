@@ -1,8 +1,8 @@
 import httpx
 import pytest
 
-from agent_hub.integrations.common import IntegrationError
-from agent_hub.integrations.confluence import ConfluenceClient
+from chatty.integrations.common import IntegrationError
+from chatty.integrations.confluence import ConfluenceClient
 
 
 def test_search_follows_context_relative_pagination():

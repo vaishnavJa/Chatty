@@ -4,7 +4,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from agent_hub.integrations.common import (
+from chatty.integrations.common import (
     IntegrationError,
     JsonClient,
     records,

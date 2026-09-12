@@ -2,7 +2,7 @@
 
 from urllib.parse import quote
 
-from agent_hub.integrations.common import (
+from chatty.integrations.common import (
     IntegrationError,
     JsonClient,
     records,

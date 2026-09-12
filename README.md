@@ -31,10 +31,10 @@ Chatty explores a simple idea: the tools your team uses should support the conve
 
 | In the conversation | What Chatty is being built to bring back |
 | --- | --- |
-| “Can you create/close an issue?” | Create or close a GitHub issue at your request. |
-| “Can you summarize the project?” | A concise overview of the project and its recent activity. |
-| “How many issues in github repo?” | The number of issues in the GitHub repository. |
-| “What issues are still open?” | A list of open issues with links to their original records. |
+| Can you create/close an issue? | Create or close a GitHub issue at your request. |
+| Can you summarize the project? | A concise overview of the project and its recent activity. |
+| How many issues in github repo? | The number of issues in the GitHub repository. |
+| What issues are still open? | A list of open issues with links to their original records. |
 
 These are examples of the intended conversation flow, not a list of currently available features. The complete meeting experience is still in development.
 
@@ -59,7 +59,6 @@ Keep the decision to act with the people in the conversation. The tool dispatche
 | Repository scope | GitHub tools currently target `vaishnavJa/Chatty`. |
 | Landing page | Static site with the intro video, responsive layout, and reduced-motion support. |
 | Conversation service | Scaffold; the backend, session authentication, and meeting UI are not wired end to end here. |
-| Other connections | Slack, Google Drive, Google Chat, Jira, Teams, Confluence, and internet search are placeholders in this checkout. |
 
 ---
 

@@ -1,10 +1,14 @@
 [project]
 name = "chatty"
 version = "0.1.0"
-description = "Scaffold for a conversational agent service with external integrations"
+description = "Local meeting assistant with OpenAI Live voice sessions"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "httpx>=0.28,<1",
+    "jsonschema>=4.23,<5",
+    "python-dotenv>=1.0,<2",
+]
 
 [project.scripts]
 chatty = "chatty.__main__:main"
@@ -14,7 +18,10 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["ruff>=0.11,<1"]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py312"

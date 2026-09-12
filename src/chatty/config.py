@@ -17,6 +17,7 @@ class Settings:
     repository: str = DEFAULT_REPOSITORY
     port: int = 3000
     web_dir: Path = PROJECT_ROOT / "web"
+    ledger_path: Path = PROJECT_ROOT / ".chatty" / "github-ledger.sqlite3"
     request_timeout: float = 45.0
     max_body_bytes: int = 65_536
     session_ttl_seconds: float = 7_200.0
@@ -42,12 +43,21 @@ class Settings:
         web_dir = Path(os.getenv("CHATTY_WEB_DIR", "web"))
         if not web_dir.is_absolute():
             web_dir = root / web_dir
+        ledger_value = os.getenv(
+            "CHATTY_GITHUB_LEDGER_PATH", ".chatty/github-ledger.sqlite3"
+        ).strip()
+        if not ledger_value or ledger_value == ":memory:":
+            raise ValueError("CHATTY_GITHUB_LEDGER_PATH must name a durable file")
+        ledger_path = Path(ledger_value)
+        if not ledger_path.is_absolute():
+            ledger_path = root / ledger_path
         return cls(
             api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             backend_model=backend,
             repository=repository,
             port=port,
             web_dir=web_dir.resolve(),
+            ledger_path=ledger_path.resolve(),
             secret_values=tuple(
                 value
                 for key in ("OPENAI_API_KEY", "GITHUB_TOKEN", "GH_TOKEN")

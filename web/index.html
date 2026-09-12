@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Chatty · Meeting companion</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Chatty home"><span class="brand-mark" aria-hidden="true">c<span></span></span>Chatty<span class="tag">DEMO</span></a>
+      <div class="workspace-label">WORKSPACE</div>
+      <div class="nav-item selected"><span aria-hidden="true">◉</span> Meeting room <span class="nav-count">01</span></div>
+      <a class="nav-item" href="https://github.com/vaishnavJa/Chatty" target="_blank" rel="noopener noreferrer"><span aria-hidden="true">⌘</span> Repository <span class="external">↗</span></a>
+      <div class="sidebar-bottom"><div class="avatar">C</div><div>Chatty prototype<small>OpenAI Hackathon</small></div></div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar"><div>Workspace <span>/</span> <strong>Meeting room</strong></div><a href="https://github.com/vaishnavJa/Chatty" target="_blank" rel="noopener noreferrer">vaishnavJa / Chatty <span>↗</span></a></header>
+      <main>
+        <div class="page-heading"><div><div class="eyebrow">YOUR PROJECT, IN THE CONVERSATION</div><h1>A teammate that keeps up.</h1><p>Talk through the work. Get context. Turn decisions into action.</p></div><span class="pill" id="connection-pill"><i></i><span id="connection-status">Checking setup</span></span></div>
+        <div id="error-banner" class="error-banner" role="alert" hidden><span id="error-text"></span><button id="dismiss-error" aria-label="Dismiss error">×</button></div>
+        <section class="session-panel panel" aria-labelledby="session-title">
+          <div class="session-main"><div class="voice-icon" id="voice-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><div><div class="eyebrow">CHATTY IS HERE</div><h2 id="session-title">Ready when you are.</h2><p id="session-description">Start with your microphone for a quick conversation.</p></div></div>
+          <div class="session-controls"><label for="audio-source">Audio source</label><div class="start-controls"><select id="audio-source"><option value="microphone">Microphone · quick test</option><option value="meeting-tab">Meeting tab · Google Meet</option></select><button class="button primary" id="start-button"><span aria-hidden="true">▶</span> Start session</button></div></div>
+          <div class="session-footer"><div class="speech-label"><i id="speech-dot"></i><span id="speech-status">Microphone off</span></div><div class="control-buttons"><button class="button" id="stop-button" disabled>■ <span>Stop speaking</span></button><button class="button" id="resume-button" disabled>↗ Resume</button><button class="button" id="end-button" disabled>End session</button></div></div>
+        </section>
+        <div class="content-grid">
+          <section class="conversation panel" aria-labelledby="conversation-title"><div class="panel-heading"><h2 id="conversation-title"><span class="section-icon">≋</span> Conversation</h2><span class="panel-meta" id="caption-count">Live captions</span></div><div class="caption-stream" id="captions" role="log" aria-label="Conversation captions"><div class="empty-state" id="caption-empty"><div class="empty-glyph" aria-hidden="true">“</div><h3>Bring Chatty into the conversation.</h3><p>Your words and Chatty’s responses appear here.<br>Start a session, then try a question below.</p></div></div><div class="prompt-strip"><span>TRY SAYING</span><p>“What changed in our repository recently?”</p><p>“Create an issue to add a meeting summary.”</p></div></section>
+          <aside class="context-column"><section class="panel repository-panel"><div class="panel-heading"><h2><span class="section-icon">⌘</span> Project context</h2><span class="tag">GITHUB</span></div><a class="repo-link" href="https://github.com/vaishnavJa/Chatty" target="_blank" rel="noopener noreferrer">vaishnavJa / <strong>Chatty</strong> <span>↗</span></a><p>Recent commits, open pull requests, issues, and the people behind the work.</p><div class="integration-state"><i id="health-dot"></i><span id="health-label">Checking local server…</span></div></section>
+          <section class="panel activity-panel"><div class="panel-heading"><h2><span class="section-icon">↗</span> Actions & sources</h2><span class="counter" id="action-count">0</span></div><div id="tool-activity" aria-live="polite"><div class="activity-empty">Repository lookups and issue receipts will appear here.</div></div></section></aside>
+        </div>
+        <section class="panel summary-panel"><div><h2>Leave with a clear next step.</h2><p id="summary-status">Ask for decisions, open questions, and action items from this conversation.</p></div><div class="summary-buttons"><button class="button" id="download-button" disabled>↓ Transcript</button><button class="button" id="summary-button" disabled>✦ Summarize</button></div></section>
+        <details class="setup-help"><summary>Using Chatty in Google Meet <span>↗</span></summary><div><ol><li>Join Meet on this laptop. Have the other participants join from their own devices.</li><li>Select <strong>Meeting tab</strong>, click <strong>Start session</strong>, choose the Meet tab, and enable <strong>Share tab audio</strong>.</li><li>In Meet, present this Chatty tab with tab audio enabled so participants hear Chatty. Keep the meeting microphone muted on this laptop to avoid an echo.</li><li>Say <strong>“Hey Chatty”</strong> to wake it. Say <strong>“Chatty, stop”</strong> or use <strong>Stop speaking</strong> to mute its replies. Input remains on for the next wake phrase.</li></ol><p>Use Chrome on localhost. Meeting audio routing needs a real meeting test. Resume permits playback; it does not flush earlier generated audio.</p></div></details>
+        <footer>Built for the conversation.<span id="session-id">No active session</span></footer>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

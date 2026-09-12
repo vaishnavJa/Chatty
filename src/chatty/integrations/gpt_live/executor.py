@@ -12,11 +12,13 @@ import threading
 import time
 from concurrent.futures import Future, TimeoutError
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 
 from chatty.config import Settings
+from chatty.integrations.github.dedup import CallLedger
 
 ALLOWED_TOOLS = frozenset(
     {
@@ -36,11 +38,19 @@ class ExecutorError(Exception):
 
 
 class ToolRegistry:
-    """Adapter for the tool owner's TOOL_SCHEMAS and execute_tool exports."""
+    """Use the durable GitHub adapter; two-argument runners are test fixtures."""
 
-    def __init__(self, schemas: list[dict], execute_tool=None, *, available=True):
+    def __init__(
+        self,
+        schemas: list[dict],
+        execute_tool=None,
+        *,
+        execute_call=None,
+        available=True,
+    ):
         self.schemas = copy.deepcopy(schemas)
         self.execute_tool = execute_tool
+        self.execute_call = execute_call
         self.available = available
         self.validators = {}
         for schema in self.schemas:
@@ -54,8 +64,8 @@ class ToolRegistry:
                 raise ValueError("Invalid GitHub tool schema")
             Draft202012Validator.check_schema(schema["parameters"])
             self.validators[name] = Draft202012Validator(schema["parameters"])
-        if self.schemas and not callable(execute_tool):
-            raise ValueError("execute_tool must be callable")
+        if self.schemas and not (callable(execute_call) or callable(execute_tool)):
+            raise ValueError("A tool runner must be callable")
 
     @classmethod
     def from_module(cls) -> "ToolRegistry":
@@ -65,7 +75,9 @@ class ToolRegistry:
             if error.name != "chatty.agents.tools":
                 raise  # A broken real module must never look like a missing feature.
             return cls([], available=False)
-        return cls(module.TOOL_SCHEMAS, module.execute_tool)
+        # The production module must expose its durable, authorized adapter.
+        # Falling back to execute_tool here would silently bypass the ledger.
+        return cls(module.TOOL_SCHEMAS, execute_call=module.execute_call)
 
     def validate(self, name: str, arguments: dict) -> None:
         if not self.available:
@@ -81,7 +93,34 @@ class ToolRegistry:
                 400, "invalid_arguments", "Arguments do not match the tool schema."
             ) from None
 
-    def run(self, name: str, arguments: dict) -> Any:
+    def run(
+        self,
+        session_id: str,
+        call_id: str,
+        name: str,
+        arguments: dict,
+        *,
+        approved,
+        ledger,
+    ) -> Any:
+        if self.execute_call is not None:
+            if name == "create_issue":
+                Path(ledger.path).parent.mkdir(parents=True, exist_ok=True)
+            result = self.execute_call(
+                session_id,
+                call_id,
+                name,
+                arguments,
+                explicit_user_request=approved,
+                ledger=ledger,
+            )
+            if (
+                not isinstance(result, dict)
+                or result.get("call_id") != call_id
+                or not isinstance(result.get("output"), str)
+            ):
+                raise ValueError("Invalid GitHub call receipt")
+            return json.loads(result["output"])
         result = self.execute_tool(name, arguments)
         if inspect.isawaitable(result):
             # Each HTTP handler has its own thread; support sync and async exports.
@@ -95,6 +134,7 @@ class ToolRegistry:
 @dataclass
 class Call:
     fingerprint: str
+    started: bool = False
     result: Future = field(default_factory=Future)
 
 
@@ -111,12 +151,14 @@ class ToolExecutor:
         self.clock = clock
         self.sessions: dict[str, Session] = {}
         self.lock = threading.Lock()
+        self.ledger = CallLedger(settings.ledger_path)
 
     def _prune(self) -> None:
         now = self.clock()
         for key, session in list(self.sessions.items()):
             if now - session.created >= self.settings.session_ttl_seconds and all(
-                call.result.done() for call in session.calls.values()
+                not call.started or call.result.done()
+                for call in session.calls.values()
             ):
                 del self.sessions[key]
 
@@ -137,8 +179,16 @@ class ToolExecutor:
                 self.sessions[session_id] = Session(self.clock(), tools)
 
     def execute(
-        self, session_id: str, call_id: str, name: str, arguments: dict
+        self,
+        session_id: str,
+        call_id: str,
+        name: str,
+        arguments: dict,
+        *,
+        approved=False,
     ) -> dict:
+        if type(approved) is not bool:
+            raise ExecutorError(400, "invalid_approval", "Approval must be a boolean.")
         # Compute before tool execution so any mutation by a tool cannot change
         # the identity of a delivered call.
         fingerprint = json.dumps([name, arguments], sort_keys=True, allow_nan=False)
@@ -156,14 +206,13 @@ class ToolExecutor:
                 )
             session.tools.validate(name, arguments)
             call = session.calls.get(call_id)
-            owner = call is None
             if call is not None and call.fingerprint != fingerprint:
                 raise ExecutorError(
                     409,
                     "call_conflict",
                     "This call ID already belongs to different arguments or a different tool.",
                 )
-            if owner:
+            if call is None:
                 if len(session.calls) >= self.settings.max_calls_per_session:
                     raise ExecutorError(
                         429,
@@ -172,9 +221,34 @@ class ToolExecutor:
                     )
                 call = Call(fingerprint)
                 session.calls[call_id] = call  # Reserve BEFORE any side effect.
+            if name == "create_issue" and not approved and not call.started:
+                # Bind the exact proposed payload but do not cache a final denial:
+                # the human may approve this same call after reviewing it in UI.
+                return {
+                    "call_id": call_id,
+                    "output": json.dumps(
+                        {
+                            "ok": False,
+                            "error": {
+                                "code": "authorization_required",
+                                "message": "Review the exact issue title and body, then click Create issue.",
+                                "uncertain": False,
+                            },
+                        }
+                    ),
+                }
+            owner = not call.started
+            call.started = True
         if owner:
             try:
-                result = session.tools.run(name, copy.deepcopy(arguments))
+                result = session.tools.run(
+                    session_id,
+                    call_id,
+                    name,
+                    copy.deepcopy(arguments),
+                    approved=approved,
+                    ledger=self.ledger,
+                )
                 # Permit a structured object or an already-serialized JSON result.
                 if isinstance(result, str):
                     result = json.loads(result)

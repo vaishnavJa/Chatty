@@ -15,6 +15,7 @@ def make_call(client, **changes):
         "call_id": "call-1",
         "name": "create_issue",
         "arguments": {"title": "Example bug"},
+        "approved": True,
     }
     body.update(changes)
     return body
@@ -32,6 +33,33 @@ def test_complete_http_handoff_and_duplicate_receipts(server_fixture):
     assert json.loads(first.json()["output"])["number"] == 42
     assert len(calls) == 1
     assert live.requests[0][0] == "v=0\r\noffer\r\n"
+
+
+def test_http_review_can_approve_same_call_after_denial(server_fixture):
+    _, client, _, calls = server_fixture()
+    body = make_call(client)
+    del body["approved"]
+    denied = client.post("/api/tools/execute", json=body)
+    assert denied.status_code == 200
+    assert (
+        json.loads(denied.json()["output"])["error"]["code"] == "authorization_required"
+    )
+    assert calls == []
+    body["approved"] = True
+    accepted = client.post("/api/tools/execute", json=body)
+    assert accepted.status_code == 200
+    assert json.loads(accepted.json()["output"])["number"] == 42
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", None, [], {}])
+def test_http_approval_rejects_non_boolean(server_fixture, value):
+    _, client, _, calls = server_fixture()
+    body = make_call(client, approved=value)
+    response = client.post("/api/tools/execute", json=body)
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_approval"
+    assert calls == []
 
 
 @pytest.mark.parametrize(

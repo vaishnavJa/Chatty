@@ -60,12 +60,15 @@ POST /api/tools/execute
 Content-Type: application/json
 Origin: http://localhost:3000
 
-{"session_id":"<connection.sessionId>","call_id":"<original call_id>","name":"create_issue","arguments":{"title":"<title>","body":"<body>"}}
+{"session_id":"<connection.sessionId>","call_id":"<original call_id>","name":"create_issue","arguments":{"title":"<title>","body":"<body>"},"approved":true}
 ```
 
 `arguments` is a **parsed JSON object**, following the tool owner's published
 schema. Do not forward the raw arguments JSON string or add authorization fields
-that the tool schema does not declare.
+inside it. Set top-level `approved: true` only after the human reviews the exact
+title/body and clicks Create issue. Reads retain the four-field interface.
+An unapproved write returns `authorization_required` without executing; the same
+bound call can subsequently be approved with unchanged name and arguments.
 
 Success or a completed tool-level failure: **200**, always the same outer shape:
 
@@ -98,9 +101,11 @@ Chatty to respond to its name; the UI still owns enforceable wake/playback polic
 
 ## GitHub owner: module contract
 
-Export `TOOL_SCHEMAS` and `execute_tool(name, arguments)` from
-`chatty.agents.tools`. The backend accepts either a synchronous or asynchronous
-function and a JSON-serializable return value (or a valid JSON string).
+Export `TOOL_SCHEMAS` and
+`execute_call(session_id, call_id, name, arguments, *, explicit_user_request, ledger)`
+from `chatty.agents.tools`. Production uses this adapter and its durable GitHub
+ledger. Two-argument synchronous/asynchronous runners are supported for injected
+offline fixtures only.
 
 Schemas use `{type:'function',name,description,parameters,strict?}` with object
 parameters. They are inserted unchanged under
@@ -112,8 +117,11 @@ timeouts; it must not retry an uncertain write automatically.
 
 There is **one** server-owned executor. Concurrent duplicates reserve
 `(session_id, call_id)` before execution; repeats return the same receipt. Changed
-arguments with the same ID get 409. Failures are cached too. Receipts live in
-memory for that local session, up to two hours; restarting rejects old sessions.
+arguments with the same ID get 409. Completed failures are cached too; an
+authorization-required response leaves a bound call pending human approval.
+Session receipts live in memory for up to two hours, and write reservations and
+results persist in `.chatty/github-ledger.sqlite3` (override with
+`CHATTY_GITHUB_LEDGER_PATH`). Keep that ledger across restarts. Restarting rejects old sessions.
 Do not replay old calls into a newly created session. No sideband tool executor.
 
 If the module is absent, Live can connect with no tools for early audio testing;
@@ -129,11 +137,12 @@ Origin, JSON, and a body of at most 64 KiB. No cross-origin CORS or LAN binding.
 These checks prevent browser cross-site writes; they do not authenticate the
 local machine's owner. Do not tunnel or reverse-proxy this demo onto the internet.
 
-The agreed four-field execution contract contains no transcript or approval
-proof. The backend cannot independently attest that a request was spoken. The
-trusted browser must dispatch only authorized requests; the voice/backend prompts
-require an explicit request and the GitHub module must treat repository text as
-data. This is a local trusted-operator demo, not a multi-user approval service.
+The optional top-level approval boolean is supplied by the trusted browser's
+human review button, never by model arguments. The backend cannot independently
+attest that a request was spoken; the operator must review the issue payload.
+Voice/backend prompts require an explicit request, and the GitHub module treats
+repository text as data. This is a local trusted-operator demo. See
+`docs/local-demo.md` for the complete approval and replay contract.
 
 ## Verification
 

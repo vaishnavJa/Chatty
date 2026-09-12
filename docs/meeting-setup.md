@@ -2,6 +2,21 @@
 
 This is the candidate route for the hackathon, not a completed meeting integration. No real Google Meet or OpenAI Live audio session has been verified by this workstream yet. Automated tests use browser fakes; the local harness below allows separate input/output checks without API credentials.
 
+## Join with the name Chatty
+
+For the demo, use a **guest participant named Chatty**. Keep Munir's Google profile name unchanged: editing that profile can change the name shown across other Google services.
+
+1. Have a teammate create the Google Meet and provide its link.
+2. Open a fresh Chrome Guest window, or an Incognito window that is not signed into Google. Keep the existing signed-in browser session unchanged.
+3. Open the meeting link in that window. Enter **Chatty** in the name field and click **Ask to join**. The host or an eligible participant must admit the guest.
+4. Join the meeting normally, with the physical microphone muted and camera optional. Do not use **Present** on the pre-join screen: that enters Companion mode, where the microphone and speakers are unavailable.
+5. Open the local Chatty app in a second tab of the **same guest/Incognito window**, then follow the audio setup below.
+6. Have another participant confirm that the meeting shows **Chatty** before starting the demo.
+
+Guest admission and presentation depend on the host's settings and any organization restrictions. If guest joining is unavailable, use an allowed demo account named Chatty; do not rename Munir's personal profile as a fallback.
+
+References: [Join Meet without a Google Account](https://support.google.com/meet/answer/9303069) and [Google profile name changes](https://support.google.com/accounts/answer/27442). This documents the intended setup; no guest has been admitted or account renamed by this change.
+
 ## Route and laptop setup
 
 ```text
@@ -9,9 +24,9 @@ Teammates on other devices → Meet tab audio → Chatty capture → OpenAI Live
 Teammates on other devices ← Meet presentation audio ← Chatty tab ← Live voice
 ```
 
-Use Chrome on this Mac and localhost or HTTPS for Chatty. Join Meet normally with Munir's account/name, microphone muted and camera optional. Do not choose Present from the pre-join screen: that enters Companion mode, where microphone and speakers are unavailable. Humans join from other devices, preferably using headphones. Keep the laptop's physical microphone muted in Meet, and choose meeting-tab input in Chatty.
+Use Chrome on this Mac and localhost or HTTPS for Chatty. Join Meet as the guest **Chatty** using the steps above, and keep the Meet and Chatty tabs in the same guest/Incognito window. Humans join from other devices, preferably using headphones. Keep the laptop's physical microphone muted in Meet, and choose meeting-tab input in Chatty.
 
-1. Join a test Meet normally in one tab. Have a teammate join on another device.
+1. Join a test Meet as the guest Chatty in one tab. Have a teammate join on another device and admit Chatty.
 2. Open Chatty in a second tab. Click its Start control with **meeting-tab** selected. In Chrome's chooser select the **Meet tab**, enable **Share tab audio**, then confirm. The chooser is mandatory; the app cannot choose a meeting for you. No audio track means the attempt fails with a useful message.
 3. In Meet, choose **Present now → A tab**, select the **Chatty tab**, and enable **Also share tab audio**. The Chatty page remains visible to participants. Do not present the Meet tab back into itself or share system-wide audio.
 4. Use the UI's wake/Resume control to allow Chatty speech. Output begins muted, including while Live connects. Keep the visible Stop button available.

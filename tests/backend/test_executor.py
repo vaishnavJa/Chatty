@@ -27,11 +27,18 @@ def test_concurrent_delivery_runs_once_and_returns_same_receipt(settings, schema
     executor.register("s", ToolRegistry(schemas, runner))
     with ThreadPoolExecutor(max_workers=4) as pool:
         first = pool.submit(
-            executor.execute, "s", "c", "create_issue", {"title": "bug"}
+            executor.execute, "s", "c", "create_issue", {"title": "bug"}, approved=True
         )
         assert started.wait(1)
         duplicates = [
-            pool.submit(executor.execute, "s", "c", "create_issue", {"title": "bug"})
+            pool.submit(
+                executor.execute,
+                "s",
+                "c",
+                "create_issue",
+                {"title": "bug"},
+                approved=True,
+            )
             for _ in range(3)
         ]
         release.set()
@@ -50,12 +57,19 @@ def test_uncertain_write_is_cached_and_changed_payload_is_rejected(settings, sch
 
     executor = ToolExecutor(settings)
     executor.register("s", ToolRegistry(schemas, runner))
-    original = executor.execute("s", "c", "create_issue", {"title": "bug"})
-    assert executor.execute("s", "c", "create_issue", {"title": "bug"}) == original
+    original = executor.execute(
+        "s", "c", "create_issue", {"title": "bug"}, approved=True
+    )
+    assert (
+        executor.execute("s", "c", "create_issue", {"title": "bug"}, approved=True)
+        == original
+    )
     assert len(calls) == 1
     assert json.loads(original["output"])["error"]["retryable"] is False
     with pytest.raises(ExecutorError) as caught:
-        executor.execute("s", "c", "create_issue", {"title": "different"})
+        executor.execute(
+            "s", "c", "create_issue", {"title": "different"}, approved=True
+        )
     assert caught.value.status == 409
 
 
@@ -73,17 +87,22 @@ def test_pending_retry_timeout_does_not_repeat_write(settings, schemas):
     executor.register("s", ToolRegistry(schemas, runner))
     with ThreadPoolExecutor() as pool:
         original = pool.submit(
-            executor.execute, "s", "c", "create_issue", {"title": "bug"}
+            executor.execute, "s", "c", "create_issue", {"title": "bug"}, approved=True
         )
         assert started.wait(1)
         try:
             with pytest.raises(ExecutorError) as caught:
-                executor.execute("s", "c", "create_issue", {"title": "bug"})
+                executor.execute(
+                    "s", "c", "create_issue", {"title": "bug"}, approved=True
+                )
             assert caught.value.code == "tool_still_running"
         finally:
             release.set()
         result = original.result()
-    assert executor.execute("s", "c", "create_issue", {"title": "bug"}) == result
+    assert (
+        executor.execute("s", "c", "create_issue", {"title": "bug"}, approved=True)
+        == result
+    )
     assert len(calls) == 1
 
 
@@ -94,7 +113,9 @@ def test_async_tool_and_json_string_return(settings, schemas):
     executor = ToolExecutor(settings)
     executor.register("s", ToolRegistry(schemas, runner))
     assert json.loads(
-        executor.execute("s", "c", "create_issue", {"title": "bug"})["output"]
+        executor.execute("s", "c", "create_issue", {"title": "bug"}, approved=True)[
+            "output"
+        ]
     ) == {"ok": True, "number": 45}
 
 
@@ -113,13 +134,17 @@ def test_limits_expiry_and_session_scoping(settings, schemas):
     with pytest.raises(ExecutorError, match="session limit"):
         executor.ensure_capacity()
     for session in ("s1", "s2"):
-        executor.execute(session, "same-call-id", "create_issue", {"title": "bug"})
+        executor.execute(
+            session, "same-call-id", "create_issue", {"title": "bug"}, approved=True
+        )
     assert len(calls) == 2
     with pytest.raises(ExecutorError, match="tool-call limit"):
-        executor.execute("s1", "new", "create_issue", {"title": "bug"})
+        executor.execute("s1", "new", "create_issue", {"title": "bug"}, approved=True)
     now[0] = 11
     with pytest.raises(ExecutorError, match="expired"):
-        executor.execute("s1", "same-call-id", "create_issue", {"title": "bug"})
+        executor.execute(
+            "s1", "same-call-id", "create_issue", {"title": "bug"}, approved=True
+        )
     executor.ensure_capacity()
 
 

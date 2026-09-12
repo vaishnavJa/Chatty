@@ -149,8 +149,10 @@ activemq-data/
 
 # Environments
 .env
+.chatty/
 .envrc
 .venv
+.venv-demo/
 env/
 venv/
 ENV/

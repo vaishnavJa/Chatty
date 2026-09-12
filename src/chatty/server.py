@@ -103,11 +103,19 @@ class ChattyApp:
         return result
 
     def execute_tool(self, body: dict) -> dict:
-        if set(body) != {"session_id", "call_id", "name", "arguments"}:
+        required = {"session_id", "call_id", "name", "arguments"}
+        if not required <= body.keys() or set(body) - required - {"approved"}:
             raise ExecutorError(
                 400,
                 "invalid_request",
-                "Expected session_id, call_id, name, and arguments.",
+                "Expected session_id, call_id, name, arguments, and optional approved.",
+            )
+        approved = body.get("approved", False)
+        if type(approved) is not bool:
+            raise ExecutorError(
+                400,
+                "invalid_approval",
+                "approved must be a boolean from the review button.",
             )
         session_id = required_string(body, "session_id", MAX_IDENTIFIER_LENGTH)
         call_id = required_string(body, "call_id", MAX_IDENTIFIER_LENGTH)
@@ -119,7 +127,9 @@ class ChattyApp:
                 "invalid_arguments",
                 "arguments must be a parsed JSON object, not a JSON string.",
             )
-        return self.executor.execute(session_id, call_id, name, arguments)
+        return self.executor.execute(
+            session_id, call_id, name, arguments, approved=approved
+        )
 
     def health(self) -> dict:
         try:

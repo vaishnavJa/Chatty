@@ -495,7 +495,7 @@ test('meeting returns quiet after one audible answer and ignores ordinary speech
   f.controller.outputActivity(true);
   clock.tick(500);
   f.controller.outputActivity(false);
-  clock.tick(1499);
+  clock.tick(2499);
   assert.equal(f.controller.speech, 'listening');
   clock.tick(1);
   assert.equal(f.controller.speech, 'waiting');
@@ -527,7 +527,7 @@ test('interim checking speech and tool completion cannot cut off the final answe
   clock.tick(2000);
   assert.equal(f.controller.speech, 'listening');
   f.controller.outputActivity(true); f.controller.outputActivity(false);
-  clock.tick(1500);
+  clock.tick(2500);
   assert.equal(f.controller.speech, 'waiting');
 });
 
@@ -545,7 +545,7 @@ test('an utterance already playing when a tool resolves does not count as final 
   clock.tick(2000);
   assert.equal(f.controller.speech, 'listening');
   f.controller.outputActivity(true); f.controller.outputActivity(false);
-  clock.tick(1500);
+  clock.tick(2500);
   assert.equal(f.controller.speech, 'waiting');
 });
 
@@ -796,7 +796,7 @@ test('meeting confirmation accepts a bare yes then waits for one final audible r
   assert.equal(f.controller.speech, 'listening');
   f.created('final_response'); f.completed('final_response');
   f.controller.outputActivity(true); f.controller.outputActivity(false);
-  f.clock.tick(1500);
+  f.clock.tick(2500);
   assert.equal(f.controller.speech, 'waiting');
 });
 

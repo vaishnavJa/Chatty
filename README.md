@@ -48,18 +48,6 @@ Read the original record when you need the detail. GitHub results include source
 
 Keep the decision to act with the people in the conversation. The tool dispatcher requires explicit authorisation for issue creation, and the durable call ledger prevents blind duplicate writes when calls are redelivered.
 
-## See the direction
-
-The [landing page](landing/README.md) brings the concept to life with the original Chatty mark, warm paper, charcoal, and orange. Its intro plays as a silent looping background, with layouts for desktop and phone screens.
-
-- **[Intro film](landing/dist/assets/chatty-intro.mp4)** — ten seconds from “Your team is talking” to “Meet Chatty.”
-- **[Video source and production notes](https://github.com/vaishnavJa/Chatty/pull/16)** — the Remotion intro and meeting-recording edit.
-- **[Hosted landing page](https://chatty-meeting-companion.takuma2460-0131.chatgpt.site)** — currently an owner-only preview.
-
-The intro illustrates the intended experience; it is not a recording of a working end-to-end meeting integration.
-
-To render the intro or append a meeting recording, follow the [demo-video guide](demo-video/README.md). After installing its dependencies, run `npm run render:intro` from `demo-video/`, or `npm run render:demo -- "/path/to/meeting.mp4"` to include a recording.
-
 ## What works today
 
 | Area | Status in this checkout |

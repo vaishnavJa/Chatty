@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/assets/chatty-heading.svg" width="480" alt="Meet Chatty.">
+  <img src="docs/assets/chatty-heading.svg" width="480" alt="Meet Chatty">
 </h1>
 
 <p align="center">

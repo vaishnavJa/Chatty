@@ -1,5 +1,5 @@
 [project]
-name = "agent-hub"
+name = "chatty"
 version = "0.1.0"
 description = "Scaffold for a conversational agent service with external integrations"
 readme = "README.md"
@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
-agent-hub = "agent_hub.__main__:main"
+chatty = "chatty.__main__:main"
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]

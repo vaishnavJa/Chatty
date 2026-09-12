@@ -1,13 +1,13 @@
-# Agent Hub
+# Chatty
 
 An empty scaffold for a conversational agent service that uses information from external services.
-The working project name is `agent-hub`.
+The project is called Chatty. Its Python package and command are named `chatty`.
 
 ## Getting started
 
 ```sh
 uv sync --locked
-uv run agent-hub
+uv run chatty
 ```
 
 The project uses Python 3.12 or later, uv, and Ruff. The entry point prints a readiness message and exits.
@@ -25,7 +25,7 @@ Run `uv run ruff format .` to apply formatting.
 ## Project structure
 
 ```text
-src/agent_hub/
+src/chatty/
 ├── __main__.py          # Smoke-check entry point
 ├── conversations/      # Conversations, messages, and sessions
 ├── agents/             # Agent execution and tool calls

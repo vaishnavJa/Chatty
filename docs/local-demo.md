@@ -17,20 +17,28 @@ answer and its source links. A real OpenAI session starts only after Start;
 starting the HTTP server does not create one. End the session after testing.
 Follow `docs/meeting-setup.md` for the subsequent meeting-tab audio test.
 
+After the first **Chatty**, follow-up questions and commands need no wake word.
+Chatty remains active through pauses and completed answers until **Chatty, stop**.
+Stop mutes remote speech, plays a brief local **Okay**, and keeps input listening.
+Start a fresh server and Live session to load changed prompts and dialogue policy;
+an existing call keeps the configuration it started with.
+
 ## Confirm an issue by voice
 
 Say “Chatty, create an issue” with the title and body you want. Chatty prepares the
-exact change, reads its proposal aloud, and asks “Do you approve this change?”
-After it finishes, say **Yes** or **Chatty confirm**. Say **No**, **Chatty cancel**,
-or **Chatty, stop** to cancel. No approval button is required. The full saved
+exact change and asks a short, natural question about the action and topic. It
+does not recite the full draft or field list. Say **Yes, go ahead**, or give an
+equivalent reply in your own words. Say **No**, **cancel**, or **Chatty, stop** to
+cancel. No approval button is required. The full saved
 payload and resulting receipt remain visible in the app.
 
 This applies to all supported repository and project mutations. The server's
 `/api/approvals/prepare`, `arm`, `voice` and `cancel` routes bind confirmation to a
 specific session, call ID and saved payload. The old `approved: true` flag on
 `/api/tools/execute` cannot authorize a write. Model arguments cannot supply
-approval. Proposals expire after 90 seconds; an amended or unclear answer cancels
-the pending proposal and requires a new one. See
+approval. Confirmation windows expire after 90 seconds; an unclear answer keeps
+the same action pending, asks a brief clarification and renews that window. A
+changed action requires a revised proposal and fresh approval. See
 [voice-approval.md](voice-approval.md) for accepted answers, long-draft behavior,
 event freshness and the exact API contract.
 

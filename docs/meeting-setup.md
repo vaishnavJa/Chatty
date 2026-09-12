@@ -31,7 +31,7 @@ Use Chrome on this Mac and localhost or HTTPS for Chatty. Keep Meet and Chatty i
 3. In **Meet → Settings → Audio**, select the same virtual cable as the **microphone**, and select **headphones or MacBook speakers** as the **speaker**. Keep the Mac's default/system output on headphones/speakers too. Never route Meet's speaker or system-wide sound to the virtual cable: Chatty would hear and retransmit the meeting.
 4. Unmute Meet's microphone only after it is set to the virtual cable. The physical laptop microphone is not part of this route. Keep the camera off if Chatty should have no outgoing video. If an old presentation is active, use **Stop presenting**; do not leave the call.
 5. In Chatty select **Meeting tab**, click Start, choose the **Meet tab**, enable **Share tab audio**, and confirm. This chooser is mandatory. The app rejects absent tab audio and known window/screen selections. Do not select the Chatty tab or capture system-wide audio.
-6. Use wake/Resume to allow speech. Output starts muted, including while Live connects or an output device changes. If output selection fails, it stays muted; select a valid output explicitly to recover.
+6. Say **Chatty** or use Resume to begin conversation. Output starts muted, including while Live connects or an output device changes. Once awake, follow-ups need no repeated name and pauses do not mute Chatty. **Chatty, stop** cuts off remote speech, plays one brief local **Okay**, and keeps input listening for the next wake word. If output selection fails, it stays muted; select a valid output explicitly to recover.
 7. Have another participant speak. Confirm Chatty hears it and that the other device hears the spoken answer as ordinary participant audio. No Chatty presentation tile should appear.
 8. Test Stop, Resume, End, and revoking tab capture. Ending releases capture; Meet remains a separate participant until someone leaves the call.
 
@@ -82,6 +82,8 @@ await live.setOutputDevice(selectedOutputDeviceId);
 await live.setOutputMuted(false);
 // Stop talking immediately, even if a tool call is still pending:
 live.setOutputMuted(true);
+// Spoken "Chatty, stop" acknowledges through the same output; the button is silent:
+await live.acknowledgeStop(); // Plays only the bundled Okay; remote stays muted.
 // To end, allow pending tool results to finish first if the app needs them.
 const result = await live.close();
 capture.stop();
@@ -99,6 +101,7 @@ Transport methods:
 | `outputDeviceId` | Getter for the audio element's selected output device ID. Empty string means system default. |
 | `setOutputDevice(deviceId)` | Selects an already-permitted audio output using `setSinkId`. Serializes changes, mutes while switching, preserves Stop/Resume intent, and rejects unsupported/missing/denied devices. Failure stays silent until an explicit successful selection. It never changes Meet settings. |
 | `setOutputMuted(boolean)` | Synchronously changes local playback mute. Returns a playback Promise when retrying unmute. Muting remains effective across late audio tracks; unmute is blocked after close starts. |
+| `acknowledgeStop()` | Mutes and detaches remote Live playback, then plays `/okay.wav` through the same selected output. Resolves `{played:true}` after the clip ends and restores the remote stream muted. Input stays enabled. Rejects if interrupted, routing fails, playback is blocked or the bounded playback deadline expires. |
 | `close()` | Immediately mutes output/disables input. Sends `session.close`, waits up to five seconds for `session.closed`, then releases tracks, playback, channel, and peer. Repeated calls return the same Promise. Resolves `{ finalized, reason, usage?, message? }`. |
 
 `onEvent(event)` receives the original parsed Live event, including transcripts, `response.event`, and final `session.closed`. The UI alone dispatches functions; it must stop submitting new commands once closing starts and ignore stale work from previous sessions. This module does not invent a speech-completed signal or infer voice completion from Responses events.
@@ -110,7 +113,7 @@ Transport methods:
 | `connecting` | Startup underway. |
 | `ready` | `session.started` received, or a temporary disconnect recovered. |
 | `output-device-selected` | `deviceId`: routing succeeded; wake/Resume still controls speech. |
-| `output-activity-unavailable` | `message`: acoustic reply detection unavailable; keep manual Stop and the UI wake timeout. |
+| `output-activity-unavailable` | `message`: acoustic reply detection unavailable; keep manual Stop available and do not infer approval timing from missing captions. |
 | `output-device-error` | `message`: routing failed and playback remains muted. Offer device reselection. |
 | `playback-blocked` | `message`: UI should offer a Resume click that calls `setOutputMuted(false)`. |
 | `reconnecting` | `message`: temporary WebRTC interruption; fail after five seconds if not recovered. |
@@ -118,11 +121,15 @@ Transport methods:
 | `error` | `message`: startup, transport, or capture failure; render as text. |
 | `closed` | `finalized`, `reason`, optional `usage`/`message`. `finalized: true` requires `session.closed`; a socket close or timeout cannot confirm final usage. |
 
-`onOutputActivity(active)` is an optional local acoustic signal, not a Live turn-completed event. It samples only remote output into an analyser every 100 ms and reports RMS above 0.01 while playback is unmuted. It neither records audio nor routes the analyser to speakers. Muting, output switching/failure, and close report inactive. The UI may use a silence interval plus settled tool calls to return to waiting, but silence alone cannot establish semantic response completion. A suspended or unavailable audio context requires manual Stop or a bounded wake timeout.
+`onOutputActivity(active)` is an optional local acoustic signal, not a Live turn-completed event. It samples remote output every 100 ms, detects RMS above 0.01 and holds activity through 900 ms of quieter audio so gaps inside a sentence do not look like completed speech. It neither records audio nor routes the analyser to speakers. Muting, output switching/failure, and close report inactive. The UI uses activity for speaking status and confirmation timing; it does not return to waiting after an answer or impose a wake timeout. Only explicit Stop ends active conversation. Missing activity cannot establish that a prompt was heard.
+
+The acknowledgment is a bundled 0.518-second PCM clip generated locally with the macOS Samantha voice; it differs from Live's conversational voice. The server exposes only `/okay.wav` as `audio/wav`, not arbitrary WAV files. Loading or playing it makes no model request. A new mute/unmute, another acknowledgment, an output change or close cancels pending acknowledgment playback. A failed clip leaves remote output muted. This local interruption does not cancel server inference or guarantee a WebRTC jitter-buffer flush.
 
 Startup waits at most ten seconds for ICE and thirty seconds total for `session.started`. A page exit releases resources immediately because browsers cannot guarantee asynchronous finalization while navigating away. Muting playback neither cancels a GitHub operation nor erases audio already heard by other participants. Muted playback continues draining; rapid Stop → Resume can still expose in-flight speech and must be tested. This module sends no undocumented same-session audio-clear/cancel commands. Keep input enabled if the UI needs Live to hear a new wake word; Stop speaking is separate from ending the session.
 
-The only browser HTTP call is `POST /api/live/session` with `{sdp}` and no API key. The backend must return `{session:{id},transport:{type:"webrtc",sdp}}` and select `gpt-live-1` in server configuration. Model selection, credentials, prompting, session policy and tools belong to the backend/UI owners.
+The transport starts with `POST /api/live/session` carrying `{sdp}` and no API key; explicit Stop can also load the same-origin `/okay.wav` asset. The backend must return `{session:{id},transport:{type:"webrtc",sdp}}` and select `gpt-live-1` in server configuration. Model selection, credentials, prompting, session policy and tools belong to the backend/UI owners.
+
+Start a fresh server and Live session to load updated prompts and dialogue behavior. Existing sessions do not adopt new configuration retroactively. Isolated mocked tests do not establish the real meeting's wake, interruption, acknowledgment, echo or natural-approval behavior; those still need a live rehearsal.
 
 ## Verification
 

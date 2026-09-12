@@ -18,26 +18,32 @@ repository switching, permission administration, or project visibility changes.
 
 ## Voice and requested actions
 
-The wake token is **Chatty**, including the name spoken alone. Chatty should handle
-one addressed request and then return to quiet listening. **Chatty, stop** stops
-speaking and requesting work. The voice instructions define this conversational
-behavior; they do not establish a guaranteed model response boundary.
+The wake token is **Chatty**, including the name spoken alone. Once awake, Chatty
+stays in the conversation until **Chatty, stop**. Follow-up questions and commands
+do not need its name again, and pauses or completed answers do not mute it.
+Stop cuts off remote output, plays one short local **Okay**, and leaves Chatty
+quiet with input still listening for the next wake word. The acknowledgment uses
+a bundled voice clip, so its voice differs from Live's conversational voice. The
+Stop button mutes silently.
 
 Repository facts come from current tool results. A requested mutation becomes a
-saved proposal. Chatty describes the operation, target and supplied fields aloud,
-then asks “Do you approve this change?” Answer **yes** or **Chatty confirm** after
-the question, or **no**, **Chatty cancel**, or **Chatty, stop** to cancel. No approval
-click is required. This follow-up is part of the same addressed request; a pending
-answer needs no new wake word. There is only one pending proposal at a time.
+saved proposal. Chatty briefly summarizes the intended action and topic, then asks
+for confirmation naturally. It does not read the full title, body or field list.
+Reply in your own words, such as **yes, go ahead**; **no** or **cancel** declines
+the action without leaving the conversation. **Chatty, stop** also ends active
+conversation. No approval click is required. There is one pending proposal at a time.
 
 The server binds approval to that proposal's session, call ID and exact arguments.
-An amended or unclear answer cancels it; a revised change requires a new proposal.
-Proposals expire after 90 seconds. Long drafts are identified by their length
-rather than read in full; saying yes approves the complete saved draft. The app
-retains its full text for optional inspection. Ask for a smaller change if every
-word needs to be read aloud. Chatty reports completion only after a tool receipt
-confirms it, and does not read long source URLs aloud. See
+An unclear answer keeps the same action pending while Chatty asks a short
+clarification. An amendment requires a revised proposal and fresh approval.
+Each confirmation window lasts 90 seconds and renews after clarification; this
+does not limit how long Chatty stays awake. Approval applies to the complete saved
+payload, available in the app for optional inspection. Chatty reports completion
+only after a tool receipt confirms it, and does not read long source URLs aloud. See
 [voice-approval.md](voice-approval.md) for the protocol and its limits.
+
+These instructions and capabilities take effect in a fresh server and Live
+session. Updating files does not change prompts already loaded in a running call.
 
 The connected GitHub account has write access, not administrator access. GitHub
 permissions and branch protections still apply. Errors and unsupported operations

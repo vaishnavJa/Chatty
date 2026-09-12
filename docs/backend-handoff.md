@@ -15,7 +15,8 @@ uv run chatty
 
 Open **http://localhost:3000**. `python -m chatty` is the equivalent installed
 entry point. `CHATTY_PORT` changes the port; binding stays on `127.0.0.1`.
-Restart after changing `.env`. `OPENAI_BACKEND_MODEL` must name a Responses model
+Start a fresh server and Live session after changing `.env`, prompts or dialogue
+policy; a running session keeps its original configuration. `OPENAI_BACKEND_MODEL` must name a Responses model
 available to your API project (default: `gpt-5.6-terra`). Voice uses `gpt-live-1`.
 The API key never goes to the browser. No SDK version with Live support is needed:
 the integration sends the documented HTTP request directly.
@@ -67,10 +68,14 @@ Origin: http://localhost:3000
 schema. Do not forward the raw arguments JSON string or add authorization fields
 inside it. Reads use this four-field interface. All mutation tools instead enter
 the application's [spoken approval protocol](voice-approval.md): prepare the exact
-call through `/api/approvals/prepare`, speak the returned proposal, arm it with
-completed playback evidence, and submit the fresh spoken answer to
+call through `/api/approvals/prepare`, speak the short action summary and natural
+confirmation question, arm it with playback and semantic prompt evidence, and
+submit the fresh spoken answer to
 `/api/approvals/voice`. No browser approval click is needed. The server returns the
-original call's receipt after approval, rejection, ambiguity or expiry.
+original call's receipt after approval, rejection, requested revision or expiry.
+An ambiguous answer returns a clarification prompt without a receipt; retain the
+same saved action, speak the short clarification and collect a fresh reply.
+The backend accepts meaning-based consent rather than requiring a fixed phrase.
 
 The legacy top-level `approved: true` on `/api/tools/execute` is not authority to
 write. A direct write returns `authorization_required` without executing. Only the
@@ -105,8 +110,11 @@ An unexpected tool exception produces a cached 200 receipt whose output is:
 Stop must mute locally even while HTTP is pending and cancel an unexecuted voice
 proposal through `/api/approvals/cancel`. It does not undo or cancel a running
 GitHub call. Preserve its receipt, and do not re-arm speech just because a tool
-completed. The backend's initial voice prompt starts silently and instructs
-Chatty to respond to its name; the UI still owns enforceable wake/playback policy.
+completed. After a wake word, Chatty stays active for follow-up questions and
+commands until explicit Stop; no answer-completed or quiet timer mutes it.
+The UI owns the single local **Okay** acknowledgment for spoken **Chatty, stop**
+while remote output remains muted; the Stop button is silent. Input stays enabled
+for the next wake word.
 
 ## GitHub owner: module contract
 

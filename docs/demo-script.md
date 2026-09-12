@@ -6,8 +6,8 @@ Run `uv run chatty` from the repository and open <http://localhost:3000> in Chro
 
 1. Leave **Microphone · quick test** selected and click **Start session**. Allow microphone access. Wait for **Connected to Live**; the UI does not mark a session connected before Live starts.
 2. Ask: “Chatty, what are the latest three commits in the Chatty repository?” Look for your words and Chatty’s response under **Conversation**, and the returned GitHub sources under **Actions & sources**.
-3. Ask: “Chatty, create an issue titled ‘Demo: save meeting summaries’ with body ‘Include decisions and owners.’” Listen to its saved proposal and “Do you approve this change?” Then say **Yes** or **Chatty confirm**. No approval click is needed. A successful action must show the returned GitHub URL. For another proposed change, say **No** or **Chatty cancel** and verify that nothing is written.
-4. While Chatty answers, say “Chatty, stop,” or click **Stop speaking**. Replies mute locally; input stays on. Say “Hey Chatty” or click **Resume** to permit replies again.
+3. Follow up without the wake word: “Create an issue for saving meeting summaries with decisions and owners.” Chatty asks a brief confirmation about that action rather than reading all fields. Reply **Yes, go ahead** or an equivalent natural answer. No approval click is needed. An unclear reply should lead to a short clarification while the same action stays pending. A successful action shows the actual GitHub URL; **No** or **cancel** declines it.
+4. While Chatty answers, say “Chatty, stop.” Remote replies mute immediately and a short local **Okay** acknowledges the spoken command; input stays on. The **Stop speaking** button mutes silently. Say “Hey Chatty” or click **Resume** to start active conversation again. Ordinary pauses and completed answers do not mute it.
 5. Click **Summarize**. The UI waits for Live to accept the summary instruction, then prompts it to speak. Only actual Live output appears as the summary; a backend completion does not mean it was spoken or heard.
 6. Click **Transcript** to download the actual captured fragments and source links. Click **End session** to stop capture and close Live.
 
@@ -18,7 +18,7 @@ If browser playback is blocked, click **Resume**. If creation reports an uncerta
 1. Join a Meet call on this laptop; have another participant join from a second device. Use the [voice-only setup](meeting-setup.md) and keep Chatty's outgoing screen presentation off.
 2. Select the configured virtual audio device as **Chatty's voice output**. In Meet, select the corresponding virtual microphone and keep it **on**. Meet's speaker must use a different device, so incoming participants are not fed straight back into the meeting.
 3. In Chatty, select **Meeting tab · Google Meet**, then **Start session**. Select the Meet browser tab and check **Share tab audio**. This captures incoming audio locally for Chatty; it does not present anything to the meeting.
-4. Ask the other participant to say “Hey Chatty, what changed in our repository?” Meeting mode starts with replies muted and wakes from the detected input phrase.
+4. Ask the other participant to say “Hey Chatty, what changed in our repository?” Meeting mode starts muted and wakes from that phrase. Continue with “Which pull requests are open?” without repeating its name; it should stay active until **Chatty, stop**.
 5. Verify both directions of audio with the other participant. Seeing captions alone does not prove they heard Chatty. Repeat the spoken issue proposal and approval from that participant's device, then verify one actual issue link.
 
 The tab chooser always requires a user gesture. Canceling it or ending during startup stops any subsequently returned capture. Choosing a window or a tab without audio yields a real error.

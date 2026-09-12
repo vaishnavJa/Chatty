@@ -237,6 +237,61 @@ def test_static_assets_are_isolated_from_secrets(server_fixture, settings, tmp_p
         assert client.get(path).status_code == 404
 
 
+def test_only_stop_acknowledgment_wav_is_public(server_fixture, settings, tmp_path):
+    settings.web_dir.mkdir()
+    sound = b"RIFF\x04\x00\x00\x00WAVE"
+    (settings.web_dir / "okay.wav").write_bytes(sound)
+    (settings.web_dir / "other.wav").write_bytes(sound)
+    (settings.web_dir / "audio").mkdir()
+    (settings.web_dir / "audio" / "okay.wav").write_bytes(sound)
+    (settings.web_dir / "okay.mp3").write_bytes(b"not the acknowledgment")
+    outside = tmp_path / "private.wav"
+    outside.write_bytes(b"private audio")
+    _, client, live, calls = server_fixture()
+
+    response = client.get("/okay.wav")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == sound
+    for path in ("/other.wav", "/audio/okay.wav", "/okay.mp3", "/%2e%2e/private.wav"):
+        assert client.get(path).status_code == 404
+    (settings.web_dir / "okay.wav").unlink()
+    (settings.web_dir / "okay.wav").symlink_to(outside)
+    assert client.get("/okay.wav").status_code == 404
+    assert live.requests == []
+    assert calls == []
+
+
+def test_approval_interrupt_route_keeps_authorization_out_of_arguments(
+    server_fixture, monkeypatch
+):
+    server, client, live, calls = server_fixture()
+    interrupted = []
+    result = {"interrupted": True, "expires_at": 123456789}
+
+    def interrupt(session_id, approval_id):
+        interrupted.append((session_id, approval_id))
+        return result
+
+    monkeypatch.setattr(server.app.approvals, "interrupt", interrupt)
+    body = {"session_id": "session-fixture", "approval_id": "approval-fixture"}
+    response = client.post("/api/approvals/interrupt", json=body)
+    assert response.status_code == 200
+    assert response.json() == result
+    assert interrupted == [(body["session_id"], body["approval_id"])]
+
+    for invalid in (
+        {"session_id": body["session_id"]},
+        {**body, "approved": True},
+        {**body, "arguments": {}},
+        {**body, "approval_id": ""},
+    ):
+        assert client.post("/api/approvals/interrupt", json=invalid).status_code == 400
+    assert len(interrupted) == 1
+    assert live.requests == []
+    assert calls == []
+
+
 def test_tool_exception_is_a_receipt_without_credentials(server_fixture, settings):
     def explode(*_):
         raise RuntimeError(settings.api_key)

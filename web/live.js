@@ -7,6 +7,10 @@ const INPUT_START_MS = 150;
 const INPUT_END_MS = 250;
 const INPUT_START_RMS = 0.015;
 const INPUT_HOLD_RMS = 0.008;
+const OUTPUT_END_MS = 900;
+const OUTPUT_START_RMS = 0.01;
+const OUTPUT_HOLD_RMS = 0.006;
+const ACKNOWLEDGEMENT_TIMEOUT_MS = 5_000;
 
 function waitForIce(peer, signal) {
   return new Promise((resolve, reject) => {
@@ -59,8 +63,13 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
   let outputQueue = Promise.resolve();
   let activityContext;
   let activitySource;
+  let activityAnalyser;
   let activityTimer;
   let outputActive = false;
+  let outputLastActiveAt = null;
+  let outputQuietSince = null;
+  let acknowledgement;
+  let remoteStream;
   let inputContext;
   let inputSource;
   let inputAnalyser;
@@ -69,6 +78,9 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
   let inputCandidateSince = null;
   let inputLastActiveAt = null;
   let inputQuietSince = null;
+  let inputSoundActive = false;
+  let inputLastSoundAt = null;
+  let inputSoundQuietSince = null;
   let inputUnavailableReason;
   const inputListeners = [];
   const pending = new AbortController();
@@ -104,18 +116,24 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     });
   }
   function setOutputMuted(muted) {
+    acknowledgement?.finish(new DOMException("Acknowledgement canceled.", "AbortError"));
     outputMuted = Boolean(muted);
     return applyOutputMute();
   }
   function applyOutputMute() {
     if (!audio) return;
-    audio.muted = outputMuted || outputSwitches > 0 || outputFailed || closing || disposed;
-    if (audio.muted) reportOutputActivity(false);
+    audio.muted = (outputMuted && !acknowledgement) || outputSwitches > 0 || outputFailed || closing || disposed;
+    if (audio.muted) {
+      outputLastActiveAt = null;
+      outputQuietSince = null;
+      reportOutputActivity(false, "muted");
+    }
     if (!audio.muted) return playOutput();
   }
   function setOutputDevice(deviceId) {
     if (typeof deviceId !== "string") return Promise.reject(new TypeError("Audio output device ID must be a string."));
     if (!audio || closing || disposed) return Promise.reject(new Error("Live is closed; output cannot be changed."));
+    acknowledgement?.finish(new DOMException("Acknowledgement canceled by output change.", "AbortError"));
     // Silence before the async device change. Stop/Resume updates the desired
     // mute state while routing is pending, rather than being undone on success.
     outputSwitches++;
@@ -144,41 +162,127 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     outputQueue = change;
     return change;
   }
-  function reportOutputActivity(active) {
+  function reportOutputActivity(active, reason = active ? "speech" : "quiet", available = true) {
     if (outputActive === active) return;
     outputActive = active;
-    onOutputActivity?.(active);
+    const observedAt = performance.now();
+    onOutputActivity?.(active, {
+      available, reason, observedAt, lastActiveAt: outputLastActiveAt,
+      quietSince: outputQuietSince,
+      quietMs: !active && outputQuietSince !== null ? Math.max(0, observedAt - outputQuietSince) : 0,
+    });
   }
   function observeOutputActivity() {
     if (!onOutputActivity || !audio?.srcObject) return;
     clearInterval(activityTimer);
     activitySource?.disconnect();
+    activityAnalyser?.disconnect();
     try {
       activityContext ??= new AudioContext();
-      const analyser = activityContext.createAnalyser();
+      const analyser = activityAnalyser = activityContext.createAnalyser();
       analyser.fftSize = 512;
       const samples = new Float32Array(analyser.fftSize);
       activitySource = activityContext.createMediaStreamSource(audio.srcObject);
       // Never connect this observer to a speaker. Playback uses only audio's sink.
       activitySource.connect(analyser);
       activityTimer = setInterval(() => {
-        if (disposed || closing || audio.muted || activityContext.state !== "running") {
-          reportOutputActivity(false);
+        if (disposed || closing || audio.muted || acknowledgement) {
+          outputLastActiveAt = null;
+          outputQuietSince = null;
+          reportOutputActivity(false, "muted");
           return;
         }
-        analyser.getFloatTimeDomainData(samples);
-        const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
-        reportOutputActivity(rms > 0.01);
+        if (activityContext.state !== "running") {
+          outputLastActiveAt = null;
+          outputQuietSince = null;
+          reportOutputActivity(false, "context-not-running", false);
+          return;
+        }
+        try {
+          analyser.getFloatTimeDomainData(samples);
+          const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
+          if (!Number.isFinite(rms)) throw new Error("Invalid output audio samples.");
+          const now = performance.now();
+          if (rms > (outputActive ? OUTPUT_HOLD_RMS : OUTPUT_START_RMS)) {
+            outputLastActiveAt = now;
+            outputQuietSince = null;
+            reportOutputActivity(true);
+          } else if (outputActive) {
+            outputQuietSince ??= now;
+            // A short pause inside a sentence is not the end of playback.
+            if (now - outputQuietSince >= OUTPUT_END_MS) reportOutputActivity(false);
+          }
+        } catch {
+          clearInterval(activityTimer);
+          activitySource?.disconnect();
+          activityAnalyser?.disconnect();
+          outputLastActiveAt = null;
+          outputQuietSince = null;
+          reportOutputActivity(false, "detector-unavailable", false);
+          state("output-activity-unavailable", { message: "Automatic reply silence detection is unavailable; use Stop speaking." });
+        }
       }, 100);
     } catch {
       state("output-activity-unavailable", { message: "Automatic reply silence detection is unavailable; use Stop speaking." });
     }
+  }
+  function acknowledgeStop() {
+    setOutputMuted(true);
+    if (!ready || closing || disposed || !audio || outputFailed || outputSwitches > 0) {
+      return Promise.reject(new Error("Live output is not ready for an acknowledgement."));
+    }
+    // Live does not expose a speech-complete or WebRTC buffer-clear event.
+    // Detach its playback instead of reopening it for a guessed spoken ack.
+    // The short local clip uses this same element's already-selected sink.
+    return new Promise((resolve, reject) => {
+      let timer;
+      let finished = false;
+      const ended = () => finish();
+      const failed = () => finish(new Error("The acknowledgement audio could not be played."));
+      const finish = (error) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        audio.removeEventListener("ended", ended);
+        audio.removeEventListener("error", failed);
+        audio.muted = true;
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+        audio.srcObject = remoteStream ?? null;
+        acknowledgement = undefined;
+        if (!closing && !disposed && remoteStream) observeOutputActivity();
+        // Keep remote playback muted. Only a subsequent wake/Resume enables it.
+        if (error) reject(error);
+        else resolve({ played: true });
+      };
+      acknowledgement = { finish };
+      audio.muted = true;
+      audio.pause();
+      audio.srcObject = null;
+      audio.src = "/okay.wav";
+      audio.addEventListener("ended", ended);
+      audio.addEventListener("error", failed);
+      timer = setTimeout(() => finish(new Error("The acknowledgement audio timed out.")), ACKNOWLEDGEMENT_TIMEOUT_MS);
+      try {
+        audio.load();
+        applyOutputMute();
+        audio.play().catch(finish);
+      } catch (error) {
+        finish(error);
+      }
+    });
   }
   function reportInputActivity(available, reason, observedAt = performance.now()) {
     onInputActivity?.(inputActive, {
       available, observedAt, lastActiveAt: inputLastActiveAt,
       quietSince: inputQuietSince,
       quietMs: !inputActive && inputQuietSince !== null ? Math.max(0, observedAt - inputQuietSince) : 0,
+      // Brief words can miss the stronger speech debounce. These raw sound
+      // fields require a fresh explicit transcript too; noise alone is not consent.
+      soundActive: inputSoundActive, lastSoundAt: inputLastSoundAt,
+      soundQuietSince: inputSoundQuietSince,
+      soundQuietMs: inputSoundQuietSince !== null ? Math.max(0, observedAt - inputSoundQuietSince) : 0,
       reason,
     });
   }
@@ -187,6 +291,9 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     inputCandidateSince = null;
     inputLastActiveAt = null;
     inputQuietSince = null;
+    inputSoundActive = false;
+    inputLastSoundAt = null;
+    inputSoundQuietSince = null;
     if (inputUnavailableReason !== reason) {
       inputUnavailableReason = reason;
       reportInputActivity(false, reason);
@@ -231,6 +338,13 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
           if (!Number.isFinite(rms)) throw new Error("Invalid input audio samples.");
           const now = performance.now();
           inputUnavailableReason = undefined;
+          inputSoundActive = rms >= INPUT_HOLD_RMS;
+          if (inputSoundActive) {
+            inputLastSoundAt = now;
+            inputSoundQuietSince = null;
+          } else if (inputLastSoundAt !== null) {
+            inputSoundQuietSince ??= now;
+          }
           if (rms >= (inputActive ? INPUT_HOLD_RMS : INPUT_START_RMS)) {
             inputQuietSince = null;
             inputCandidateSince ??= now;
@@ -283,8 +397,10 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     clearTimeout(closeTimer);
     clearTimeout(disconnectTimer);
     stopInputActivity("closed");
+    acknowledgement?.finish(new DOMException("Live closed.", "AbortError"));
     clearInterval(activityTimer);
     activitySource?.disconnect();
+    activityAnalyser?.disconnect();
     activityContext?.close().catch(() => {});
     reportOutputActivity(false);
     pending.abort(new DOMException("Live connection closed.", "AbortError"));
@@ -374,7 +490,9 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
       if (disposed) { track.stop(); return; }
       remoteTracks.add(track);
       if (track.kind !== "audio") { track.stop(); return; }
-      audio.srcObject = new MediaStream([...remoteTracks].filter((item) => item.kind === "audio"));
+      remoteStream = new MediaStream([...remoteTracks].filter((item) => item.kind === "audio"));
+      if (acknowledgement) return;
+      audio.srcObject = remoteStream;
       observeOutputActivity();
       playOutput();
     });
@@ -454,7 +572,7 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     await started;
     if (disposed || closing) throw new Error("Live closed during startup.");
     return {
-      sessionId, send, setInputEnabled, setOutputMuted, setOutputDevice, close,
+      sessionId, send, setInputEnabled, setOutputMuted, setOutputDevice, acknowledgeStop, close,
       get outputDeviceId() { return audio.sinkId ?? ""; },
     };
   } catch (error) {

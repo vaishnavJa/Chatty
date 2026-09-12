@@ -1,130 +1,132 @@
-# Approve GitHub changes by voice
+# Natural conversation and spoken approval
 
-All 17 supported repository and project mutations use spoken approval. Keep the
-Chatty app open for its audio connection; nobody needs to click an approval button.
+Say **Chatty** once to begin a conversation. Follow-up questions and commands do
+not need its name again. Chatty stays active through pauses and completed answers
+until **Chatty, stop**. That phrase cuts off remote speech, plays one brief local
+**Okay**, and leaves input listening for the next wake word. The Stop button mutes
+silently. The bundled acknowledgment uses a different voice from Live.
 
-1. Say **“Chatty, create an issue titled Demo follow-up with body Review the demo.”**
-2. Chatty prepares the change and reads its operation, destination and supplied
-   fields aloud, ending with **“Do you approve this change?”**
-3. After it finishes, say **“Yes”** or **“Chatty confirm.”** Say **“No,” “Chatty
-   cancel,”** or **“Chatty, stop”** to cancel instead.
-4. Wait for the result. Chatty reports success only after GitHub returns a receipt;
-   the app also shows the actual link or error.
+All 17 supported repository and project mutations use a saved proposal and spoken
+approval. Keep the app open for its audio connection; no approval click is needed.
 
-The example creates a real issue only after approval. Use a deliberately chosen
-demo issue when rehearsing. Reads need no approval. The confirmation question and
-answer are part of one addressed request, so a pending “yes” needs no extra wake
-word. After completing that request, Chatty returns to quiet listening.
+1. Ask **“Create an issue for saving meeting summaries with decisions and owners.”**
+2. Chatty asks a short question such as **“Should I create that meeting-summary
+   issue?”** It does not read the full title, body or field list.
+3. Reply naturally: **“Yes, go ahead,” “That sounds good,”** or an equivalent clear
+   instruction to carry out the proposal. **No** or **cancel** declines it.
+4. If your reply is unclear, Chatty asks a brief clarification and keeps the same
+   saved action pending. If you ask to change the action, it prepares a revised
+   proposal and obtains fresh approval.
+5. Chatty reports success only after the actual tool receipt confirms it. The app
+   shows the saved payload and returned link or error for optional inspection.
 
-Only one proposal can wait for approval at a time. It expires 90 seconds after
-preparation. A changed or ambiguous answer cancels that proposal: clarify what you
-want and Chatty will prepare a fresh one. Silence, an unrelated “yes,” assistant
-speech, repository content and screen content do not approve a pending change.
-
-The complete arguments are saved before Chatty asks. Long text fields are announced
-as prepared drafts with their character lengths; the full draft remains visible
-in the app for optional inspection. Saying yes approves that complete saved draft,
-including text not read aloud. Ask for a smaller change if every word must be read
-aloud. The proposal is rejected if its spoken description exceeds the bounded
-prompt size rather than silently dropping fields. Changed arguments always need
-fresh approval.
+These examples create a real issue only after approval; choose a deliberate demo
+issue for live rehearsal. Reads need no confirmation. Approval covers the complete
+saved payload, not only the brief spoken summary. Only one proposal is pending at
+a time. Its confirmation window lasts 90 seconds and renews after clarification;
+this expiration never puts an otherwise active conversation to sleep.
 
 ## Application and backend contract
 
-The browser remains the sole Live function dispatcher. A mutation function call
-**proposes** the action; it does not authorize execution. Live and its delegated
-backend emit concrete tool arguments once the user request is clear. They do not
-ask for approval independently before emitting that call. The application then
-requests one spoken confirmation and handles the answer itself.
+The browser is the sole Live function dispatcher. A mutation function call proposes
+an action rather than authorizing it. Once the explicit request is clear, Live's
+backend emits the concrete tool arguments immediately. The application supplies
+one short confirmation question and collects the answer. The conversational model
+must not independently grant approval, add approval fields to tool arguments or
+create another mutation call merely because the participant answered yes.
 
-All requests below are same-origin JSON POSTs to the localhost server. The app
-keeps opaque session and function call IDs unchanged. Approval IDs and evidence
-belong to the application, never to model tool arguments.
+All routes use same-origin localhost JSON POSTs. Opaque session/call IDs remain
+unchanged. Approval IDs and transcript evidence belong to the application.
 
 | Endpoint | Request fields | Result |
 | --- | --- | --- |
-| `/api/approvals/prepare` | `session_id`, `call_id`, `name`, `arguments` | `approval_id`, `call_id`, `prompt`, `expires_at` (epoch milliseconds) |
-| `/api/approvals/arm` | `session_id`, `approval_id`, `output_events`, `playback_finished: true` | `armed: true` |
-| `/api/approvals/voice` | `session_id`, `approval_id`, `input_events`, `speech_finished: true`, `quiet_ms` | `status`, `receipt`, optional `message` |
+| `/api/approvals/prepare` | `session_id`, `call_id`, `name`, `arguments` | `approval_id`, `call_id`, short `prompt`, `expires_at` in epoch milliseconds |
+| `/api/approvals/arm` | `session_id`, `approval_id`, `output_events`, `playback_finished: true` | `armed` and `input_after_ms` when ready; incomplete speech returns retryable `armed: false` |
+| `/api/approvals/voice` | `session_id`, `approval_id`, `input_events`, `speech_finished: true`, `quiet_ms` | Terminal receipt or a nonterminal clarification/interruption |
+| `/api/approvals/interrupt` | `session_id`, `approval_id` | Invalidates pending interpretation while retaining the same proposal; an already executing write cannot be interrupted |
 | `/api/approvals/cancel` | `session_id`, optional `approval_id` | Cancellation status and any available receipt |
 
-`prepare` validates the registered tool schema and binds the exact arguments to
-the session and original call ID. The saved copy is the only payload that can be
-executed. Reusing that call ID with changed arguments conflicts; an unresolved
-proposal blocks a second one in the same session. The generated `prompt` names
-the operation, destination and supplied fields and ends with the approval question.
+`prepare` validates the registered schema and saves an immutable copy of the exact
+arguments. A short summary identifies the action, target and topic. The summary
+omits the full draft and internal fields; the saved payload remains available in
+the app. Changing arguments under the same call ID conflicts.
 
-`arm` requires the original `session.output_transcript.delta` envelopes containing
-the complete proposal and question, plus the browser's playback-finished signal.
-Case, punctuation, spacing and spoken-number differences are normalized. It does
-not arm from `response.completed`, a successful instruction acknowledgment, a
-question fragment, or a backend result. The browser waits for measured output
-audio to become quiet before claiming playback has finished.
+`arm` checks fresh `session.output_transcript.delta` evidence plus the browser's
+playback-finished signal. The spoken wording may vary: it must describe the pending
+action and ask for consent, rather than match an exact string. An incomplete prompt
+keeps the proposal pending for more evidence. Instruction acknowledgment and
+`response.completed` alone do not establish that the question was spoken.
 
-`voice` uses original `session.input_transcript.delta` envelopes for a fresh answer
-after the spoken prompt. Each event retains `event_id`, `delta`, `start_ms` and
-`end_ms`. Event IDs and intervals are checked for freshness and reuse. Only the
-whole accumulated utterance is classified: **yes**, **confirm**, **approve**,
-**go ahead**, and simple variants can approve, with an optional **Chatty** prefix.
-**No**, **cancel**, **stop**, and their supported variants reject. A positive word
-inside a longer amendment or unrelated sentence does not approve.
+`voice` considers fresh `session.input_transcript.delta` envelopes containing
+`event_id`, `delta`, `start_ms` and `end_ms`. The browser waits for measured input
+quiet and settled captions. Server-provided `input_after_ms` allows a short reply
+to overlap the end of the consent question by up to 750 ms; earlier speech or
+reused evidence cannot authorize the action. A fragment containing yes is not
+executed while the same reply is still being accumulated.
 
-The browser waits for measured input audio to finish, at least one second of
-input quiet, and transcript text to settle before submitting. No partial “yes”
-fragment may execute a tool. `status` is `approved`, `rejected`, `ambiguous` or
-`expired`; completed states include the original `{call_id, output}` receipt,
-where `output` is already a JSON string. Submit that receipt unchanged as the
-Live `function_call_output`, then continue only when all required results have
-been provided. Approval success means the action was authorized; inspect the
-receipt to determine whether GitHub actually succeeded.
+Common clear replies have a local interpretation path. Other wording is classified
+against the saved proposal by a bounded, no-tools Responses request using the
+existing configured backend model and key. A strict JSON schema constrains the
+classification. It uses a five-second HTTP timeout and may add latency; this is
+not a guarantee of total response time. Refusal, malformed output, timeout or uncertainty never authorizes
+a mutation. The classifier cannot edit the saved payload or execute tools.
+Repository text, draft content and screenshots remain data, not approval.
 
-`cancel` terminates a pending proposal. It can be called without an approval ID
-to cancel the session's current proposal during Stop or session cleanup. Stopping
-after execution has started cannot undo the GitHub request; retain its eventual
-receipt and keep playback muted. A finished approval ID is consumed once and
-duplicate requests return the same result. The existing durable GitHub ledger
-protects write reservations and receipts across restarts. Never remove that ledger
-or retry an uncertain write using a new call ID.
+A clear approval executes the saved action once through the existing durable
+ledger. `approved`, `rejected`, `revision_requested` and `expired` outcomes provide
+a `{call_id, output}` receipt; inspect its JSON-string `output` to learn whether
+GitHub succeeded. `revision_requested` includes the requested amendment so Live
+can clarify and propose a new call with fresh approval. No old approval transfers
+to the revised action.
 
-`/api/tools/execute` continues to handle reads. Its legacy top-level `approved:
-true` is no longer authority for a write; writes must pass through the approval
-manager. The manager calls the existing executor with its saved payload after
-spoken confirmation. No sideband executor or model-supplied approval flag exists.
+`ambiguous` returns a short clarification `prompt`, `message` and renewed
+`expires_at`, without a tool receipt. Keep the same immutable action, speak the
+clarification, re-arm and collect a fresh answer. Do not report the function as
+completed or cancel it merely because the first reply was unclear.
 
-## Trust and timing limits
+If the participant continues speaking during interpretation, `interrupt` invalidates
+that classification generation without canceling the proposal. The old voice
+request returns `interrupted` without a receipt. The browser accumulates the
+continued reply and submits it when settled. If interruption returns `armed: false`, speak the supplied
+prompt and re-arm before submitting; `armed: true` includes the renewed
+`input_after_ms` and `expires_at` for the continued reply. Already executing writes
+return `interrupted: false`. Stop or explicit cancellation ends a
+pending proposal; late classifier results cannot authorize it afterward. Once a
+GitHub request is executing, neither interrupt nor Stop can undo it. Keep its
+receipt even if playback stays muted.
 
-This is a trusted localhost demonstration. The server validates transcript
-envelopes relayed by our browser and that browser's audio-activity claims. It does
-not independently obtain the provider stream, authenticate a speaker, or prove
-that audio was heard. Anyone audible in the meeting can answer a pending question.
-Fabricated browser evidence, acoustic replay and speech-recognition errors are
-outside that trust boundary. Host and Origin checks do not authenticate individual
-meeting participants.
+Submit final receipts unchanged as Live `function_call_output` items and continue
+a delegated response only after all required results are supplied. The old HTTP
+`approved: true` flag on `/api/tools/execute` is not authority for a write. No
+sideband executor or model-supplied approval flag exists. Keep the persistent
+GitHub ledger across restarts and never retry an uncertain write with a new ID.
 
-Live transcript deltas have no authoritative user-turn-completed event. Audio
-quiet and settled-text windows are application heuristics, so a long pause before
-a correction can be mistaken for the end of a response. They need a real meeting
-rehearsal with delayed captions, interruptions and overlapping speech. This is
-not a guarantee of complete utterance recognition or speaker authorization.
+## Trust, timing and deployment
 
-Keep Chatty's microphone input and voice output isolated using the
-[voice-only meeting setup](meeting-setup.md). Chatty must not present its screen.
-Optional incoming screen context supplies requested snapshots and never grants
-authorization for a change.
+The localhost server trusts our browser's relayed provider events and audio-activity
+claims. It does not independently authenticate a speaker, prove that a question
+was heard, or detect fabricated browser evidence or acoustic replay. Anyone audible
+in the meeting can answer a pending proposal. Host/Origin checks protect the web
+boundary, not participant identity.
 
-## Verification
+Live has no authoritative transcript-turn-completed event. Quiet and caption-settle
+windows are practical heuristics; long pauses, overlapping speech, delayed captions
+and recognition errors can still affect decisions. Natural-language interpretation
+is also fallible. This does not promise flawless consent detection or speaker
+authentication. Keep the virtual microphone isolated from captured meeting audio;
+Chatty must not present its screen.
 
-Offline backend and browser tests exercise proposals, fresh and stale evidence,
-whole-utterance confirmation, denial, ambiguity, expiry, duplicate requests,
-changed payloads, Stop, session teardown and all supported mutation paths. Tests
-use fake providers and GitHub calls; they do not create live issues.
+Changes require a fresh server and Live session. Editing files does not change
+prompts or code already loaded in the running meeting. Isolated mocked tests cover
+request boundaries, saved payloads, natural decisions, clarification, interruption,
+replay, cancellation and acknowledgment routing. They make no real OpenAI/GitHub
+calls and do not open microphones. Real meeting wake/follow-ups, the audible Okay,
+natural confirmation and exactly one GitHub receipt still need a live rehearsal.
 
-After restarting the server and starting a fresh Live session, rehearse an
-explicitly requested disposable issue: hear the proposal, answer yes, and verify
-exactly one GitHub receipt. Rehearse no and “Chatty, stop” before confirming a
-second proposal and verify that neither creates an issue. Hearing these phrases
-through real Meet audio remains separate evidence from automated test results.
+See [meeting setup](meeting-setup.md) for the voice-only audio route and
+[capabilities](capabilities.md) for repository and project scope.
 
-Primary API references:
+Implementation references:
 [Live delegation and function results](https://developers.openai.com/api/docs/guides/live-delegation),
-[Live transcript and playback semantics](https://developers.openai.com/api/docs/guides/live-conversations).
+[Live transcript and playback semantics](https://developers.openai.com/api/docs/guides/live-conversations),
+and [Structured Outputs and refusal handling](https://developers.openai.com/api/docs/guides/structured-outputs).

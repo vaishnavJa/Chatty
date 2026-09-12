@@ -403,43 +403,42 @@ test("unsupported output selection cannot silently fall back to laptop speakers"
   finalized(f);
 });
 
-test("output activity observes only remote audio and stops with mute/cleanup", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
-  let level = 0.05;
-  let observer;
-  let source;
-  const context = {
-    state: "running",
-    createAnalyser() { observer = { getFloatTimeDomainData: (samples) => samples.fill(level) }; return observer; },
-    createMediaStreamSource(stream) {
-      assert.deepEqual(stream.getTracks(), [remote]);
-      source = { connect: (node) => assert.equal(node, observer), disconnect: () => {} };
-      return source;
-    },
-    async close() { this.state = "closed"; },
-  };
-  const restore = replaceGlobals({ AudioContext: class { constructor() { return context; } } });
-  t.after(restore);
+test("output activity bridges sentence pauses but stops immediately with mute/cleanup", async (t) => {
+  const analysis = audioAnalysis();
   const changes = [];
-  const f = setup(t, { onOutputActivity: (active) => changes.push(active) });
+  const f = setup(t, { onOutputActivity: (active, details) => changes.push({ active, ...details }) });
+  t.after(analysis.restore);
   const live = await ready(f);
   const remote = new Track();
+  remote.level = 0.05;
   f.peer.receiveTrack(remote);
-  t.mock.timers.tick(100);
+  analysis.tick(100);
   assert.deepEqual(changes, []);
+  assert.deepEqual(analysis.contexts[0].sources[0].stream.getTracks(), [remote]);
   await live.setOutputMuted(false);
-  t.mock.timers.tick(100);
-  assert.deepEqual(changes, [true]);
-  level = 0;
-  t.mock.timers.tick(100);
-  assert.deepEqual(changes, [true, false]);
-  level = 0.05;
-  t.mock.timers.tick(100);
+  analysis.tick(100);
+  assert.deepEqual(changes.map(event => event.active), [true]);
+  remote.level = 0;
+  analysis.tick(500);
+  assert.deepEqual(changes.map(event => event.active), [true]);
+  remote.level = 0.008; // Quieter syllables remain above the output hold threshold.
+  analysis.tick(100);
+  assert.deepEqual(changes.map(event => event.active), [true]);
+  remote.level = 0;
+  analysis.tick(900);
+  assert.deepEqual(changes.map(event => event.active), [true]);
+  analysis.tick(100);
+  assert.deepEqual(changes.map(event => event.active), [true, false]);
+  assert.equal(changes.at(-1).quietMs, 900);
+  remote.level = 0.05;
+  analysis.tick(100);
   live.setOutputMuted(true);
-  assert.deepEqual(changes, [true, false, true, false]);
+  assert.deepEqual(changes.map(event => event.active), [true, false, true, false]);
+  assert.equal(changes.at(-1).reason, "muted");
+  assert.equal(changes.at(-1).quietMs, 0);
   finalized(f);
-  assert.equal(context.state, "closed");
-  t.mock.timers.tick(1000);
+  assert.equal(analysis.contexts[0].state, "closed");
+  analysis.tick(1000);
   assert.equal(changes.length, 4);
 });
 
@@ -475,6 +474,9 @@ test("initial and long input silence never provide approval evidence", async (t)
     assert.equal(event.lastActiveAt, null);
     assert.equal(event.quietSince, null);
     assert.equal(event.quietMs, 0);
+    assert.equal(event.lastSoundAt, null);
+    assert.equal(event.soundQuietSince, null);
+    assert.equal(event.soundQuietMs, 0);
   }
   assert.equal(f.activity.at(-1).observedAt, 5000);
   assert.deepEqual(f.analysis.contexts[0].sources[0].stream.getTracks(), [f.input]);
@@ -492,6 +494,7 @@ test("input speech requires sustained activity and reports actual quiet with mon
   assert.deepEqual(f.activity.at(-1), {
     active: true, available: true, observedAt: 200, lastActiveAt: 200,
     quietSince: null, quietMs: 0, reason: "speech",
+    soundActive: true, lastSoundAt: 200, soundQuietSince: null, soundQuietMs: 0,
   });
   f.input.level = 0.01; // Hysteresis keeps quieter syllables inside the utterance.
   f.analysis.tick(50);
@@ -504,6 +507,7 @@ test("input speech requires sustained activity and reports actual quiet with mon
   assert.deepEqual(f.activity.at(-1), {
     active: false, available: true, observedAt: 550, lastActiveAt: 250,
     quietSince: 300, quietMs: 250, reason: "quiet",
+    soundActive: false, lastSoundAt: 250, soundQuietSince: 300, soundQuietMs: 250,
   });
   f.analysis.tick(750);
   assert.equal(f.activity.at(-1).quietMs, 1000);
@@ -679,4 +683,155 @@ test("invalid analyser samples invalidate prior speech and release the observer"
   assert.equal(f.analysis.timers.size, 0);
   assert.equal(f.analysis.contexts[0].state, "closed");
   finalized(f);
+});
+
+test("brief input words retain raw activity and measured quiet for fresh transcript approval", async (t) => {
+  const f = inputActivitySetup(t);
+  const live = await ready(f);
+  f.analysis.tick(500);
+  f.input.level = 0.01;
+  f.analysis.tick(50); // A short, quiet yes can miss the strong 150ms debounce.
+  assert.equal(f.activity.at(-1).active, false);
+  assert.equal(f.activity.at(-1).lastActiveAt, null);
+  assert.equal(f.activity.at(-1).soundActive, true);
+  assert.equal(f.activity.at(-1).lastSoundAt, 550);
+  f.input.level = 0;
+  f.analysis.tick(1050);
+  assert.equal(f.activity.at(-1).soundActive, false);
+  assert.equal(f.activity.at(-1).soundQuietSince, 600);
+  assert.equal(f.activity.at(-1).soundQuietMs, 1000);
+  // This is audio evidence only; no transcript means no approval or API command.
+  assert.deepEqual(f.peer.channel.sent, []);
+  live.setInputEnabled(false);
+  assert.equal(f.activity.at(-1).lastSoundAt, null);
+  assert.equal(f.activity.at(-1).soundQuietMs, 0);
+  finalized(f);
+});
+
+test("local stop acknowledgement uses the selected sink while remote playback stays detached", async (t) => {
+  const f = setup(t, { outputDeviceId: "teams-virtual-audio" });
+  const live = await ready(f);
+  const remote = new Track();
+  f.peer.receiveTrack(remote);
+  await live.setOutputMuted(false);
+  const audio = f.env.audios[0];
+  const ack = live.acknowledgeStop();
+  assert.equal(audio.srcObject, null);
+  assert.equal(audio.src, "/okay.wav");
+  assert.equal(audio.sinkId, "teams-virtual-audio");
+  assert.equal(audio.muted, false);
+  assert.equal(f.input.enabled, true);
+  const late = new Track();
+  f.peer.receiveTrack(late);
+  assert.equal(audio.srcObject, null);
+  audio.dispatchEvent(new Event("ended"));
+  assert.deepEqual(await ack, { played: true });
+  assert.equal(audio.muted, true);
+  assert.equal(audio.src, "");
+  assert.deepEqual(audio.srcObject.getTracks(), [remote, late]);
+  assert.equal(audio.sinkId, "teams-virtual-audio");
+  assert.deepEqual(f.peer.channel.sent, []); // UI owns documented model steering.
+  finalized(f);
+});
+
+test("Stop, Resume and a repeated acknowledgement cancel the previous clip", async (t) => {
+  const f = setup(t);
+  const live = await ready(f);
+  f.peer.receiveTrack(new Track());
+  const audio = f.env.audios[0];
+  const stopped = live.acknowledgeStop();
+  live.setOutputMuted(true);
+  await assert.rejects(stopped, { name: "AbortError" });
+  assert.equal(audio.muted, true);
+  const resumed = live.acknowledgeStop();
+  await live.setOutputMuted(false);
+  await assert.rejects(resumed, { name: "AbortError" });
+  assert.equal(audio.src, "");
+  assert.equal(audio.muted, false);
+  const previous = live.acknowledgeStop();
+  const latest = live.acknowledgeStop();
+  await assert.rejects(previous, { name: "AbortError" });
+  audio.dispatchEvent(new Event("ended"));
+  await latest;
+  assert.equal(audio.muted, true);
+  assert.equal(f.input.enabled, true);
+  finalized(f);
+});
+
+test("closing or changing the output device cancels an acknowledgement without leaking remote audio", async (t) => {
+  const f = setup(t, { outputDeviceId: "first-cable" });
+  const live = await ready(f);
+  f.peer.receiveTrack(new Track());
+  const changed = live.acknowledgeStop();
+  await live.setOutputDevice("second-cable");
+  await assert.rejects(changed, { name: "AbortError" });
+  assert.equal(f.env.audios[0].muted, true);
+  assert.equal(f.env.audios[0].sinkId, "second-cable");
+  const closed = live.acknowledgeStop();
+  live.close();
+  await assert.rejects(closed, { name: "AbortError" });
+  assert.equal(f.env.audios[0].muted, true);
+  finalized(f);
+  assert.equal(f.env.audios[0].srcObject, null);
+});
+
+test("acknowledgement load, playback and timeout failures remain muted", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = setup(t);
+  const live = await ready(f);
+  f.peer.receiveTrack(new Track());
+  const audio = f.env.audios[0];
+  audio.rejectPlayback = true;
+  await assert.rejects(live.acknowledgeStop(), /Autoplay denied/);
+  assert.equal(audio.muted, true);
+  audio.rejectPlayback = false;
+  const failed = live.acknowledgeStop();
+  audio.dispatchEvent(new Event("error"));
+  await assert.rejects(failed, /could not be played/);
+  assert.equal(audio.muted, true);
+  const timedOut = live.acknowledgeStop();
+  t.mock.timers.tick(5000);
+  await assert.rejects(timedOut, /timed out/);
+  assert.equal(audio.muted, true);
+  assert.equal(audio.src, "");
+  assert.equal(f.input.enabled, true);
+  finalized(f);
+});
+
+test("acknowledgement cannot bypass an unavailable or pending output route", async (t) => {
+  const f = setup(t);
+  const live = await ready(f);
+  const audio = f.env.audios[0];
+  let finish;
+  audio.setSinkId = () => new Promise(resolve => { finish = resolve; });
+  const changing = live.setOutputDevice("cable");
+  await flush();
+  await assert.rejects(live.acknowledgeStop(), /not ready/);
+  assert.equal(audio.muted, true);
+  assert.equal(audio.src, "");
+  finish();
+  await changing;
+  finalized(f);
+});
+
+test("the first remote track arriving during acknowledgement is observed after restoration", async (t) => {
+  const output = [];
+  const f = inputActivitySetup(t, { live: { onOutputActivity: active => output.push(active) } });
+  const live = await ready(f);
+  const ack = live.acknowledgeStop();
+  const remote = new Track();
+  remote.level = 0.05;
+  f.peer.receiveTrack(remote);
+  assert.equal(f.analysis.contexts.length, 1); // Only the input observer exists.
+  f.env.audios[0].dispatchEvent(new Event("ended"));
+  await ack;
+  assert.equal(f.analysis.contexts.length, 2);
+  assert.deepEqual(f.analysis.contexts[1].sources[0].stream.getTracks(), [remote]);
+  f.analysis.tick(100);
+  assert.deepEqual(output, []);
+  await live.setOutputMuted(false);
+  f.analysis.tick(100);
+  assert.deepEqual(output, [true]);
+  finalized(f);
+  assert.equal(f.analysis.timers.size, 0);
 });

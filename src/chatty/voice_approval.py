@@ -9,96 +9,27 @@ Only bounded evidence for the current confirmation is retained, never a meeting.
 """
 
 import copy
+import hashlib
 import json
 import math
-import re
 import secrets
 import threading
 import time
 from concurrent.futures import Future, TimeoutError
 from dataclasses import dataclass, field
 
-from chatty.agents.tools import TOOL_CAPABILITIES, WRITE_TOOL_NAMES
+from chatty.agents.tools import WRITE_TOOL_NAMES
+from chatty.approval_language import (
+    ApprovalLanguage,
+    confirmation_prompt,
+    prompt_input_boundary,
+)
 from chatty.integrations.gpt_live.executor import ExecutorError
 
 MAX_EVENTS = 128
 MAX_TEXT = 16_384
-
-
-def normalize(text):
-    return " ".join(re.sub(r"[^\w\s]", "", text.lower()).split())
-
-
-def _number_words(value):
-    small = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
-    tens = "zero ten twenty thirty forty fifty sixty seventy eighty ninety".split()
-    if value < 20:
-        return small[value]
-    if value < 100:
-        return tens[value // 10] + (" " + small[value % 10] if value % 10 else "")
-    if value < 1000:
-        return (
-            small[value // 100]
-            + " hundred"
-            + (" " + _number_words(value % 100) if value % 100 else "")
-        )
-    if value < 1_000_000:
-        return (
-            _number_words(value // 1000)
-            + " thousand"
-            + (" " + _number_words(value % 1000) if value % 1000 else "")
-        )
-    return str(value)
-
-
-def normalize_prompt(text):
-    # Speech often spells numbers and punctuation. This only normalizes prompt
-    # evidence; approval command classification keeps its strict whole utterance.
-    text = re.sub(
-        r"\b\d+\b",
-        lambda match: _number_words(int(match[0])) if len(match[0]) < 7 else match[0],
-        text,
-    )
-    text = re.sub(r"\b(?:slash|dot|colon)\b", "", text, flags=re.I)
-    return normalize(text).replace(" ", "")
-
-
-def confirmation_prompt(name, arguments, repository):
-    """Describe every supplied field; explicitly identify drafts too long to read."""
-    target = (
-        "the configured GitHub project"
-        if "project" in name
-        else "the Chatty repository"
-    )
-    label = TOOL_CAPABILITIES[name]["label"]
-    parts = [f"Proposed change: {label} in {target}."]
-    for key, value in arguments.items():
-        rendered = (
-            value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-        )
-        rendered = " ".join(rendered.split())
-        if key in {"sha", "expected_sha", "expected_head_sha"}:
-            rendered = "the exact previously read revision"
-        elif len(rendered) > 100:
-            rendered = (
-                f"the prepared {len(rendered)} character draft; full text in the app"
-            )
-        parts.append(
-            f"{key.replace('_', ' ')}: {rendered or 'empty; clear this field'}."
-        )
-    if TOOL_CAPABILITIES[name]["destructive"]:
-        parts.append(
-            "This operation can remove data, merge code, or run workflow effects."
-        )
-    prompt = " ".join(parts) + " Do you approve this change?"
-    # Never silently omit fields from a confirmation to meet a model token limit.
-    if len(prompt) > 650:
-        raise ExecutorError(
-            400,
-            "proposal_too_long",
-            "Split this change into smaller actions so Chatty can describe each one before spoken approval.",
-        )
-    return prompt
+MAX_ATTEMPTS = 32
+MAX_CLASSIFIERS = 4
 
 
 @dataclass
@@ -115,14 +46,31 @@ class Approval:
     boundary: float = 0
     state: str = "pending"
     result: Future = field(default_factory=Future)
+    attempts: dict = field(default_factory=dict)
+    generation: int = 0
+    latest_reply: Future | None = None
+    attempts_started: int = 0
+    checks_in_flight: int = 0
+    prompt_seen: bool = False
 
 
 class VoiceApprovals:
-    def __init__(self, executor, *, clock=time.monotonic, wall_clock=time.time, ttl=90):
+    def __init__(
+        self,
+        executor,
+        *,
+        clock=time.monotonic,
+        wall_clock=time.time,
+        ttl=90,
+        language=None,
+    ):
         self.executor = executor
         self.clock = clock
         self.wall_clock = wall_clock
         self.ttl = ttl
+        self.language = (
+            language if language is not None else ApprovalLanguage(executor.settings)
+        )
         self.lock = threading.RLock()
         self.approvals = {}
         self.active = {}
@@ -164,7 +112,10 @@ class VoiceApprovals:
                 "unknown_approval",
                 "This spoken confirmation is not part of this session.",
             )
-        if approval.state in {"pending", "armed"} and self.clock() >= approval.deadline:
+        if (
+            approval.state in {"pending", "armed", "checking_prompt", "classifying"}
+            and self.clock() >= approval.deadline
+        ):
             self._reject(
                 approval,
                 "expired",
@@ -193,7 +144,13 @@ class VoiceApprovals:
             old_id = self.active.get(session_id)
             if old_id:
                 old = self._lookup(session_id, old_id)
-                if old.state in {"pending", "armed", "executing"}:
+                if old.state in {
+                    "pending",
+                    "armed",
+                    "checking_prompt",
+                    "classifying",
+                    "executing",
+                }:
                     if old.call_id == call_id and old.fingerprint == fingerprint:
                         return self._prepared(old)
                     if old.call_id == call_id and old.state != "executing":
@@ -324,7 +281,14 @@ class VoiceApprovals:
         with self.lock:
             approval = self._lookup(session_id, approval_id)
             if approval.state == "armed":
-                return {"armed": True}
+                return {"armed": True, "input_after_ms": approval.boundary}
+            if approval.state == "checking_prompt":
+                return {
+                    "armed": False,
+                    "retryable": True,
+                    "code": "prompt_check_running",
+                    "message": "The spoken proposal is still being checked.",
+                }
             if approval.state != "pending":
                 raise ExecutorError(
                     409,
@@ -332,24 +296,52 @@ class VoiceApprovals:
                     "This confirmation is no longer pending.",
                 )
             if playback_finished is not True:
-                raise ExecutorError(
-                    400,
-                    "prompt_not_finished",
-                    "Wait for the actual confirmation prompt playback to finish.",
+                return {
+                    "armed": False,
+                    "retryable": True,
+                    "code": "prompt_not_finished",
+                    "message": "Wait for the spoken question to finish.",
+                }
+            events = copy.deepcopy(
+                self._evidence(
+                    approval, output_events, "session.output_transcript.delta"
                 )
-            events = self._evidence(
-                approval, output_events, "session.output_transcript.delta"
             )
-            text = normalize_prompt("".join(event["delta"] for event in events))
-            if normalize_prompt(approval.prompt) not in text:
-                raise ExecutorError(
-                    409,
-                    "prompt_not_observed",
-                    "Chatty must speak the complete proposed change before accepting confirmation.",
-                )
+            text = "".join(event["delta"] for event in events)
+            previous_boundary = approval.boundary
+            approval.state = "checking_prompt"
+            approval.generation += 1
+            generation = approval.generation
+        try:
+            ready = self.language.prompt_ready(
+                approval.name, copy.deepcopy(approval.arguments), text
+            )
+        except Exception:
+            ready = False
+        with self.lock:
+            self._lookup(
+                session_id, approval_id
+            )  # Expiry/cancellation can win while classification runs.
+            if approval.state != "checking_prompt" or approval.generation != generation:
+                return {
+                    "armed": False,
+                    "retryable": False,
+                    "code": "approval_not_pending",
+                    "message": "This proposal is no longer waiting for a decision.",
+                }
+            if not ready:
+                approval.state = "pending"
+                return {
+                    "armed": False,
+                    "retryable": True,
+                    "code": "prompt_not_observed",
+                    "message": "Chatty is still describing the change or asking for approval.",
+                }
             self._remember(approval, events)
+            approval.boundary = prompt_input_boundary(events, previous_boundary)
             approval.state = "armed"
-            return {"armed": True}
+            approval.prompt_seen = True
+            return {"armed": True, "input_after_ms": approval.boundary}
 
     def _reject(self, approval, status, message):
         receipt = self.executor.cancel_write(
@@ -378,16 +370,43 @@ class VoiceApprovals:
             ) from None
 
     def voice(self, session_id, approval_id, input_events, speech_finished, quiet_ms):
+        try:
+            attempt_key = hashlib.sha256(
+                json.dumps(input_events, sort_keys=True, allow_nan=False).encode()
+            ).hexdigest()
+        except (ValueError, TypeError):
+            raise ExecutorError(
+                400, "invalid_voice_evidence", "Supply valid transcript evidence."
+            ) from None
         with self.lock:
             approval = self._lookup(session_id, approval_id)
-            if approval.state not in {"pending", "armed"}:
+            if approval.state in {
+                "executing",
+                "approved",
+                "rejected",
+                "expired",
+                "revision_requested",
+            }:
+                result = approval.result
+                owner = False
+            elif attempt_key in approval.attempts:
+                result = approval.attempts[attempt_key]
                 owner = False
             else:
-                if approval.state != "armed":
+                if approval.state not in {"armed", "classifying"}:
                     raise ExecutorError(
                         409,
                         "approval_not_armed",
                         "Wait until Chatty has finished asking for this confirmation.",
+                    )
+                if (
+                    approval.attempts_started >= MAX_ATTEMPTS
+                    or approval.checks_in_flight >= MAX_CLASSIFIERS
+                ):
+                    raise ExecutorError(
+                        429,
+                        "approval_check_limit",
+                        "Too many simultaneous or repeated approval replies. Wait for the current reply or cancel this proposal.",
                     )
                 if (
                     speech_finished is not True
@@ -400,91 +419,186 @@ class VoiceApprovals:
                         "speech_not_finished",
                         "Wait for input audio to end and at least one second of measured quiet.",
                     )
-                events = self._evidence(
-                    approval, input_events, "session.input_transcript.delta"
+                events = copy.deepcopy(
+                    self._evidence(
+                        approval, input_events, "session.input_transcript.delta"
+                    )
                 )
+                text = "".join(event["delta"] for event in events)
+                approval.state = "classifying"
+                approval.generation += 1
+                generation = approval.generation
+                result = Future()
+                approval.attempts[attempt_key] = result
+                approval.latest_reply = result
+                approval.attempts_started += 1
+                approval.checks_in_flight += 1
+                owner = True
+        if not owner:
+            return self._wait_result(result)
+        try:
+            intent = self.language.reply_intent(
+                approval.name, copy.deepcopy(approval.arguments), text
+            )
+        except Exception:
+            intent = "unclear"
+        finally:
+            with self.lock:
+                approval.checks_in_flight -= 1
+        with self.lock:
+            self._lookup(
+                session_id, approval_id
+            )  # Never execute stale consent after a slow classifier.
+            if result.done():
+                return (
+                    result.result()
+                )  # An explicit interruption invalidated this attempt.
+            if approval.state != "classifying" or approval.generation != generation:
+                successor = (
+                    approval.result
+                    if approval.state
+                    in {
+                        "approved",
+                        "executing",
+                        "rejected",
+                        "expired",
+                        "revision_requested",
+                    }
+                    else approval.latest_reply
+                )
+                execute = False
+            elif intent == "reject":
                 self._remember(approval, events)
-                text = normalize("".join(event["delta"] for event in events))
-                text = re.sub(r"^(?:hey )?chatty\s+", "", text)
-                positive = {
-                    "yes",
-                    "yes please",
-                    "yes do it",
-                    "yes go ahead",
-                    "yes i approve",
-                    "yes approve",
-                    "approve",
-                    "approved",
-                    "i approve",
-                    "confirm",
-                    "confirmed",
-                    "go ahead",
-                    "do it",
-                    "please do it",
-                }
-                negative = {
-                    "no",
-                    "no thanks",
-                    "no thank you",
-                    "no dont",
-                    "no dont do it",
-                    "dont do it",
-                    "do not do it",
-                    "cancel",
-                    "cancel it",
-                    "cancel this",
-                    "cancel this change",
-                    "stop",
-                    "pause",
-                    "be quiet",
-                    "reject",
-                    "reject it",
-                    "never mind",
-                    "nevermind",
-                }
-                if text in negative:
-                    return self._reject(
+                result.set_result(
+                    self._reject(
                         approval,
                         "rejected",
                         "The proposed change was canceled by voice. No change was applied.",
                     )
-                if text not in positive:
-                    return self._reject(
-                        approval,
-                        "ambiguous",
-                        "That response was not an unambiguous approval. Clarify the request and propose a new exact change before asking again.",
-                    )
-                approval.state = "executing"  # Consume before releasing the lock.
-                owner = True
-        if owner:
-            try:
-                receipt = self.executor.execute(
-                    approval.session_id,
-                    approval.call_id,
-                    approval.name,
-                    approval.arguments,
-                    approved=True,
                 )
-            except Exception:
-                receipt = {
+                return result.result()
+            elif intent == "revise":
+                self._remember(approval, events)
+                outcome = self._reject(
+                    approval,
+                    "revision_requested",
+                    "The participant requested a revision. Do not apply the old proposal; prepare the revised action and ask for approval.",
+                )
+                outcome["revision"] = text[:2000]
+                output = json.loads(outcome["receipt"]["output"])
+                output["revision_request"] = text[:2000]
+                outcome["receipt"] = {
                     "call_id": approval.call_id,
-                    "output": json.dumps(
-                        {
-                            "ok": False,
-                            "error": {
-                                "code": "approval_execution_uncertain",
-                                "message": "The approved action did not return a confirmed receipt. Check GitHub before requesting it again.",
-                                "uncertain": True,
-                                "retryable": False,
-                            },
-                        }
-                    ),
+                    "output": json.dumps(output),
                 }
+                result.set_result(outcome)
+                return outcome
+            elif intent != "approve":
+                self._remember(approval, events)
+                approval.state = "pending"
+                approval.deadline = self.clock() + self.ttl
+                approval.expires_at = int((self.wall_clock() + self.ttl) * 1000)
+                outcome = {
+                    "status": "ambiguous",
+                    "message": "I didn't catch a clear decision. Should I go ahead with this change?",
+                    "prompt": approval.prompt,
+                    "expires_at": approval.expires_at,
+                }
+                result.set_result(outcome)
+                return outcome
+            else:
+                self._remember(approval, events)
+                approval.state = "executing"
+                successor = None
+                execute = True
+        if not execute:
+            outcome = self._wait_result(successor)
             with self.lock:
-                approval.state = "approved"
-                approval.result.set_result({"status": "approved", "receipt": receipt})
-                self.active.pop(approval.session_id, None)
-        return self._result(approval)
+                if not result.done():
+                    result.set_result(outcome)
+                return result.result()
+        try:
+            receipt = self.executor.execute(
+                approval.session_id,
+                approval.call_id,
+                approval.name,
+                approval.arguments,
+                approved=True,
+            )
+        except Exception:
+            receipt = {
+                "call_id": approval.call_id,
+                "output": json.dumps(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "approval_execution_uncertain",
+                            "message": "The approved action did not return a confirmed receipt. Check GitHub before requesting it again.",
+                            "uncertain": True,
+                            "retryable": False,
+                        },
+                    }
+                ),
+            }
+        with self.lock:
+            approval.state = "approved"
+            outcome = {"status": "approved", "receipt": receipt}
+            approval.result.set_result(outcome)
+            result.set_result(outcome)
+            self.active.pop(approval.session_id, None)
+        return outcome
+
+    def _wait_result(self, future):
+        try:
+            return future.result(timeout=self.executor.settings.duplicate_wait_seconds)
+        except TimeoutError:
+            raise ExecutorError(
+                504,
+                "tool_still_running",
+                "The current decision or approved action is still being handled. Retry only this same approval ID.",
+            ) from None
+
+    def interrupt(self, session_id, approval_id):
+        """New speech invalidates a classifier, without canceling the proposal."""
+        with self.lock:
+            approval = self._lookup(session_id, approval_id)
+            if approval.state in {"executing", "approved"}:
+                return {"interrupted": False, "status": "executing"}
+            if approval.state == "classifying":
+                approval.generation += 1
+                approval.state = "armed"
+                invalidated = {
+                    future for future in approval.attempts.values() if not future.done()
+                }
+                for previous in invalidated:
+                    previous.set_result({"status": "interrupted"})
+                approval.attempts = {
+                    key: value
+                    for key, value in approval.attempts.items()
+                    if value not in invalidated
+                }
+                approval.latest_reply = None
+            if approval.state == "pending" and approval.prompt_seen:
+                # A clarification may finish just before this interruption arrives.
+                # The same proposal was already described; keep its newer input
+                # boundary, and let fresh continued speech decide it.
+                approval.state = "armed"
+                approval.generation += 1
+            if approval.state == "armed":
+                return {
+                    "interrupted": True,
+                    "armed": True,
+                    "input_after_ms": approval.boundary,
+                    "expires_at": approval.expires_at,
+                }
+            if approval.state == "pending":
+                return {
+                    "interrupted": True,
+                    "armed": False,
+                    "prompt": approval.prompt,
+                    "expires_at": approval.expires_at,
+                }
+            return {"interrupted": False, "status": approval.state}
 
     def cancel(self, session_id, approval_id=None):
         with self.lock:
@@ -493,7 +607,7 @@ class VoiceApprovals:
             if not approval_id:
                 return {"status": "rejected", "message": "No pending change remains."}
             approval = self._lookup(session_id, approval_id)
-            if approval.state in {"pending", "armed"}:
+            if approval.state in {"pending", "armed", "checking_prompt", "classifying"}:
                 return self._reject(
                     approval,
                     "rejected",

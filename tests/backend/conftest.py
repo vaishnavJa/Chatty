@@ -4,6 +4,7 @@ from dataclasses import replace
 import httpx
 import pytest
 
+from chatty.approval_language import ApprovalLanguage
 from chatty.config import Settings
 from chatty.integrations.gpt_live.executor import ToolRegistry
 from chatty.server import create_server
@@ -71,6 +72,11 @@ def server_fixture(settings):
             replace(settings, **overrides),
             live_client=gateway,
             tool_factory=lambda: registry,
+        )
+        # These HTTP tests are localhost-only. Natural-language fallback tests
+        # inject a MockTransport separately; fixture approvals never call OpenAI.
+        server.app.approvals.language = ApprovalLanguage(
+            replace(server.app.settings, api_key="")
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()

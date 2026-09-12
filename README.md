@@ -1,21 +1,28 @@
 # Chatty
 
-An empty scaffold for a conversational agent service that uses information from external services.
-The project is called Chatty. Its Python package and command are named `chatty`.
+A local meeting assistant using OpenAI GPT-Live and repository tools.
+The Python package and command are named `chatty`.
 
 ## Getting started
 
 ```sh
 uv sync --locked
+# Copy .env.example to .env and set OPENAI_API_KEY locally.
 uv run chatty
 ```
 
-The project uses Python 3.12 or later, uv, and Ruff. The entry point prints a readiness message and exits.
-There is no web server or user interface yet.
+The project uses Python 3.12 or later, uv, and Ruff. Open http://localhost:3000.
+The server binds only to the demo laptop and serves the UI owner's `web/` files.
+Before those files land, it displays a backend-ready page. Live sessions require
+an API key with GPT-Live access and an available `OPENAI_BACKEND_MODEL`.
+
+See [the backend handoff](docs/backend-handoff.md) for the exact session/tool
+contracts, teammate integration instructions, local trust model, and audio test checklist.
 
 ## Development checks
 
 ```sh
+uv run pytest tests/backend
 uv run ruff check .
 uv run ruff format --check .
 ```
@@ -26,7 +33,9 @@ Run `uv run ruff format .` to apply formatting.
 
 ```text
 src/chatty/
-├── __main__.py          # Smoke-check entry point
+├── __main__.py          # Local server entry point
+├── config.py            # Server-only environment configuration
+├── server.py            # Local UI, session, and tool-execution endpoints
 ├── conversations/      # Conversations, messages, and sessions
 ├── agents/             # Agent execution and tool calls
 └── integrations/       # Service-specific integrations
@@ -40,22 +49,23 @@ src/chatty/
     └── internet_search/
 ```
 
-Each package is currently a placeholder.
-Authentication, API calls, conversation persistence, and agent execution are not implemented.
-The specific GPT-Live service and API will be selected during implementation.
+The GPT-Live integration creates voice sessions with managed Responses delegation.
+The GitHub owner supplies `chatty.agents.tools.TOOL_SCHEMAS` and `execute_tool`.
+The backend registers sessions, validates tool calls, and deduplicates execution.
+Other service packages remain placeholders.
 
 The Teams, Confluence, and Internet Search packages are also placeholders.
 Service connections and internet searches cannot be performed yet.
 The Internet Search provider and API will be selected during implementation.
 The agent is intended to access search result titles, URLs, and summaries.
 
-Environment variable loading is not implemented yet. `.env` is excluded from Git.
+Environment variables load from the repository's `.env`, which is excluded from Git.
+Existing environment variables take precedence. Never place credentials in `web/`.
 
 ## Next implementation steps
 
-1. Choose the conversation UI and backend API architecture.
-2. Define the GPT-Live integration and implement the first agent conversation.
-3. Implement user authentication and connection credential storage.
-4. Integrate Slack, Google Drive, Google Chat, Jira, Teams, and Confluence.
-5. Select an Internet Search API and include source URLs in conversation responses.
-6. Require user confirmation before sending data to or updating external services.
+The four demo issues split ownership across the Live backend, meeting audio,
+GitHub tools, and UI. Integrate their documented interfaces, then verify a real
+meeting conversation and one explicitly requested issue creation. Jira and other
+services are future work. This demo is for a trusted operator on one laptop;
+multi-user authentication and approval workflows are not implemented.

@@ -1,5 +1,7 @@
 <h1 align="center">
-  <img src="docs/assets/chatty-heading.svg" width="330" alt="Chatty">
+  <a href="https://meetchatty.vercel.app/">
+    <img src="docs/assets/chatty-heading.svg" width="330" alt="Chatty — visit website">
+  </a>
 </h1>
 
 <p align="center">
@@ -18,11 +20,6 @@
 </p>
 
 [![Meet Chatty — Your AI meeting companion. Keep the conversation moving.](landing/dist/assets/chatty-poster.jpg)](landing/dist/assets/chatty-intro.mp4)
-
-<p align="center">
-  <a href="landing/dist/assets/chatty-intro.mp4">Watch the 10-second intro</a> ·
-  <a href="#the-idea">The idea</a>
-</p>
 
 ## The idea
 
@@ -79,8 +76,6 @@ To render the intro or append a meeting recording, follow the [demo-video guide]
 | Landing page | Static site with the intro video, responsive layout, and reduced-motion support. |
 | Conversation service | Scaffold; the backend, session authentication, and meeting UI are not wired end to end here. |
 | Other connections | Slack, Google Drive, Google Chat, Jira, Teams, Confluence, and internet search are placeholders in this checkout. |
-
-See the [GitHub integration guide](src/chatty/integrations/github/README.md) for tool schemas, authorisation requirements, error handling, and backend/UI integration details.
 
 ---
 

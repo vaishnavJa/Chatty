@@ -21,8 +21,6 @@ GitHub tools are implemented; the complete meeting experience is still in develo
 
 ---
 
-<p align="center">Built at an <a href="https://aitinkerers.org/">AI Tinkerers</a> event.</p>
-
 <p align="center">
   <a href="https://aitinkerers.org/">
     <img src="landing/dist/assets/ai-tinkerers.png" width="220" alt="AI Tinkerers">

@@ -48,17 +48,19 @@ Read the original record when you need the detail. GitHub results include source
 
 ### A next step. At your request.
 
-Keep the decision to act with the people in the conversation. The tool dispatcher requires explicit authorisation for issue creation, and the durable call ledger prevents blind duplicate writes when calls are redelivered.
+Keep the decision to act with the people in the conversation. Chatty prepares the requested repository or project change, reads its proposal aloud, and asks for spoken approval. Say yes or Chatty confirm to approve, or no, Chatty cancel, or Chatty stop to cancel. No browser approval click is needed. The durable call ledger prevents blind duplicate writes when calls are redelivered.
 
 ## What works today
 
 | Area | Status in this checkout |
 | --- | --- |
-| GitHub reads | Recent commits, open pull requests, and open issues, with source links. |
-| GitHub issue creation | Explicit-request gate, validated inputs, and durable call deduplication. |
-| Repository scope | GitHub tools currently target `vaishnavJa/Chatty`. |
+| GitHub reads | Repository, commits, issues, comments, pull requests, branches, files, and workflow context, with source links. |
+| GitHub and project changes | 17 supported mutations with saved proposals, spoken approval, validated inputs, and durable call deduplication. |
+| Repository scope | GitHub tools target `vaishnavJa/Chatty` and one optional server-configured project; GitHub permissions still apply. |
 | Landing page | Static site with the intro video, responsive layout, and reduced-motion support. |
-| Conversation service | Scaffold; the backend, session authentication, and meeting UI are not wired end to end here. |
+| Meeting companion | Local OpenAI Live backend and meeting UI; virtual-microphone replies without outgoing screen presentation, Chatty wake/stop, and optional requested screen snapshots. |
+
+The prototype trusts its local browser and meeting participants; it does not authenticate individual speakers. Speech timing and the final voice-approval flow still require a live rehearsal. Setup and limits are in the [local demo guide](docs/local-demo.md), [meeting setup](docs/meeting-setup.md), and [spoken approval contract](docs/voice-approval.md).
 
 ---
 

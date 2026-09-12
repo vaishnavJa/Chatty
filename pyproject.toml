@@ -1,10 +1,13 @@
 [project]
 name = "agent-hub"
 version = "0.1.0"
-description = "Scaffold for a conversational agent service with external integrations"
+description = "Read-only Teams, Confluence, and internet search clients for Chatty"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "httpx>=0.28,<1",
+    "python-dotenv>=1,<2",
+]
 
 [project.scripts]
 agent-hub = "agent_hub.__main__:main"
@@ -14,7 +17,10 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["ruff>=0.11,<1"]
+dev = [
+    "pytest>=8,<10",
+    "ruff>=0.11,<1",
+]
 
 [tool.ruff]
 target-version = "py312"

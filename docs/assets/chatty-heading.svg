@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="100" viewBox="0 0 600 100" role="img" aria-label="Meet Chatty.">
+  <style>
+    .title { fill: #1f2328; }
+    @media (prefers-color-scheme: dark) { .title { fill: #f0f6fc; } }
+  </style>
+  <g transform="translate(8 5)">
+    <path d="M16 12H64C70.6 12 76 17.4 76 24V52C76 58.6 70.6 64 64 64H36L17 77V64H16C9.4 64 4 58.6 4 52V24C4 17.4 9.4 12 16 12Z" fill="#ff7146"/>
+    <g fill="#111512">
+      <rect x="22" y="30" width="8" height="16" rx="4"/>
+      <rect x="36" y="23" width="8" height="30" rx="4"/>
+      <rect x="50" y="30" width="8" height="16" rx="4"/>
+    </g>
+  </g>
+  <text class="title" x="108" y="48" dominant-baseline="central" font-family="Arial, Helvetica, sans-serif" font-size="64" font-weight="700" letter-spacing="-2">Meet Chatty.</text>
+</svg>

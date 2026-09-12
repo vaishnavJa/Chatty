@@ -76,6 +76,7 @@
 }
 
 .hero-aside p{margin-bottom:0}
+.context-list>div>span:last-child{font:22px/1 var(--mono);letter-spacing:0;flex:0 0 22px;text-align:center}
 .masthead,.rail,.meta{border:0}
 .community-logo{display:flex;align-items:center;justify-content:center;min-height:44px;padding:12px}
 .community-logo img{width:180px;height:auto}

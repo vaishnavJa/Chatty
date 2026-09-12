@@ -16,3 +16,17 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = ["ruff>=0.11,<1"]
 
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+indent-width = 4
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["B", "C4", "E", "F", "I", "UP", "W"]
+ignore = ["E501"] # Leave line wrapping to the formatter.
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

@@ -1,0 +1,11 @@
+node_modules
+dist
+.DS_Store
+.env
+
+# Ignore the output video from Git but not videos you import into src/.
+out
+
+# Recordings and machine-specific edit settings stay local.
+public/meeting/
+meeting.props.json

@@ -8,10 +8,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from agent_hub.integrations.common import IntegrationError, require_text
-from agent_hub.integrations.confluence import ConfluenceClient
-from agent_hub.integrations.internet_search import InternetSearchClient
-from agent_hub.integrations.teams import TeamsClient
+from chatty.integrations.common import IntegrationError, require_text
+from chatty.integrations.confluence import ConfluenceClient
+from chatty.integrations.internet_search import InternetSearchClient
+from chatty.integrations.teams import TeamsClient
 
 
 def credential(name: str) -> str:

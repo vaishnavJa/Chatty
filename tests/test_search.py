@@ -1,6 +1,6 @@
 import httpx
 
-from agent_hub.integrations.internet_search import InternetSearchClient
+from chatty.integrations.internet_search import InternetSearchClient
 
 
 def test_search_returns_citable_results():

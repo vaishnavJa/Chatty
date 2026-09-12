@@ -10,7 +10,7 @@ Install Python 3.12 or newer and uv, then run:
 
 ```sh
 uv sync --locked
-uv run agent-hub --help
+uv run chatty --help
 cp .env.example .env
 ```
 
@@ -35,10 +35,10 @@ Application tokens can read known team/channel IDs with the appropriate Graph
 application permissions; `teams list` uses `/me` and requires a delegated token.
 
 ```sh
-uv run agent-hub --env-file .env teams list
-uv run agent-hub --env-file .env teams channels TEAM_ID
-uv run agent-hub --env-file .env teams messages TEAM_ID CHANNEL_ID --limit 100
-uv run agent-hub --env-file .env teams replies TEAM_ID CHANNEL_ID MESSAGE_ID
+uv run chatty --env-file .env teams list
+uv run chatty --env-file .env teams channels TEAM_ID
+uv run chatty --env-file .env teams messages TEAM_ID CHANNEL_ID --limit 100
+uv run chatty --env-file .env teams replies TEAM_ID CHANNEL_ID MESSAGE_ID
 ```
 
 IDs come from preceding commands. Quote IDs containing shell-special characters.
@@ -60,9 +60,9 @@ an `api.atlassian.com/ex/confluence` gateway and Data Center deployments are not
 supported by this configuration.
 
 ```sh
-uv run agent-hub --env-file .env confluence search "release plan"
-uv run agent-hub --env-file .env confluence search 'type = page AND space = ENG' --cql --limit 50
-uv run agent-hub --env-file .env confluence page 12345
+uv run chatty --env-file .env confluence search "release plan"
+uv run chatty --env-file .env confluence search 'type = page AND space = ENG' --cql --limit 50
+uv run chatty --env-file .env confluence page 12345
 ```
 
 Text searches escape CQL string literals; `--cql` passes an explicit CQL query.
@@ -80,7 +80,7 @@ Set `BRAVE_SEARCH_API_KEY` to a Brave Search API key with web search access.
 The provider's subscription and usage limits apply.
 
 ```sh
-uv run agent-hub --env-file .env search "Python release notes" --limit 5
+uv run chatty --env-file .env search "Python release notes" --limit 5
 ```
 
 The result is a JSON array of web results, including provider titles, URLs, and
@@ -94,7 +94,7 @@ Reference: [Brave Web Search API](https://api-dashboard.search.brave.com/api-ref
 ```python
 import os
 
-from agent_hub.integrations.internet_search import InternetSearchClient
+from chatty.integrations.internet_search import InternetSearchClient
 
 with InternetSearchClient(os.environ["BRAVE_SEARCH_API_KEY"]) as client:
     results = client.search("Python release notes", limit=5)

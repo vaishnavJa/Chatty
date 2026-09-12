@@ -1,8 +1,8 @@
 import httpx
 import pytest
 
-from agent_hub.integrations.common import IntegrationError
-from agent_hub.integrations.internet_search import InternetSearchClient
+from chatty.integrations.common import IntegrationError
+from chatty.integrations.internet_search import InternetSearchClient
 
 
 @pytest.mark.parametrize(

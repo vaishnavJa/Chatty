@@ -1,8 +1,8 @@
 import httpx
 import pytest
 
-from agent_hub.integrations.common import IntegrationError
-from agent_hub.integrations.teams import TeamsClient
+from chatty.integrations.common import IntegrationError
+from chatty.integrations.teams import TeamsClient
 
 
 @pytest.mark.parametrize(

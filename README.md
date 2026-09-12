@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/assets/chatty-heading.svg" width="480" alt="Meet Chatty.">
+  <img src="docs/assets/chatty-heading.svg" width="330" alt="Chatty">
 </h1>
 
 <p align="center">
@@ -15,8 +15,7 @@
 
 <p align="center">
   <a href="landing/dist/assets/chatty-intro.mp4">Watch the 10-second intro</a> ·
-  <a href="#the-idea">The idea</a> ·
-  <a href="#whats-next">What’s next</a>
+  <a href="#the-idea">The idea</a>
 </p>
 
 ## The idea
@@ -76,40 +75,6 @@ To render the intro or append a meeting recording, follow the [demo-video guide]
 | Other connections | Slack, Google Drive, Google Chat, Jira, Teams, Confluence, and internet search are placeholders in this checkout. |
 
 See the [GitHub integration guide](src/chatty/integrations/github/README.md) for tool schemas, authorisation requirements, error handling, and backend/UI integration details.
-
-## Build with us
-
-```text
-landing/                    Landing page, video, and brand assets
-src/chatty/
-├── __main__.py             Package readiness check
-├── agents/                 GitHub tool schemas and dispatch
-├── conversations/          Conversation scaffolding
-└── integrations/
-    ├── github/             Reads, issue creation, transport, and call ledger
-    └── …                   Planned service integrations
-tests/                      Offline GitHub tool tests
-```
-
-Run the existing development checks:
-
-```sh
-uv run ruff check .
-uv run ruff format --check .
-uv run python -m unittest discover -s tests -p 'test_github*.py'
-```
-
-The GitHub tests use fixtures and temporary storage, without making live API calls or creating real issues. Use `uv run ruff format .` to apply Python formatting.
-
-## What’s next
-
-- Connect the meeting audio, conversation UI, and backend into one working experience.
-- Add user authentication, session ownership, and secure connection credential storage.
-- Bring the GitHub tools into live conversations with source-linked answers.
-- Expand beyond GitHub to the services where teams keep their context.
-- Record a real meeting flow: question → source → explicitly requested action.
-
-Have an idea or a useful meeting scenario? [Open an issue](https://github.com/vaishnavJa/Chatty/issues) and help shape what comes next.
 
 ---
 

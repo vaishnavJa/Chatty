@@ -29,7 +29,7 @@ function waitForIce(peer, signal) {
  * Owns the supplied stream until close/failure. Does not execute tools.
  * onState(state, details): see docs/meeting-setup.md for the callback contract.
  */
-export async function connectLive({ stream, onEvent = () => {}, onState = () => {}, signal }) {
+export async function connectLive({ stream, onEvent = () => {}, onState = () => {}, onOutputActivity, signal, outputDeviceId = "" }) {
   const inputTracks = stream?.getAudioTracks() ?? [];
   if (!inputTracks.some((track) => track.readyState === "live")) {
     stream?.getTracks().forEach((track) => track.stop());
@@ -45,6 +45,14 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
   let closeTimer;
   let disconnectTimer;
   let startTimer;
+  let outputMuted = true;
+  let outputSwitches = 0;
+  let outputFailed = false;
+  let outputQueue = Promise.resolve();
+  let activityContext;
+  let activitySource;
+  let activityTimer;
+  let outputActive = false;
   const pending = new AbortController();
   const remoteTracks = new Set();
   const listeners = [];
@@ -69,6 +77,7 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
   }
   function playOutput() {
     if (!audio?.srcObject || closing || disposed || audio.muted) return;
+    if (activityContext?.state === "suspended") activityContext.resume().catch(() => {});
     return audio.play().catch(() => {
       if (!closing && !disposed && !audio.muted) {
         state("playback-blocked", { message: "Click Resume to allow Chatty audio playback." });
@@ -76,9 +85,75 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     });
   }
   function setOutputMuted(muted) {
+    outputMuted = Boolean(muted);
+    return applyOutputMute();
+  }
+  function applyOutputMute() {
     if (!audio) return;
-    audio.muted = Boolean(muted) || closing || disposed;
+    audio.muted = outputMuted || outputSwitches > 0 || outputFailed || closing || disposed;
+    if (audio.muted) reportOutputActivity(false);
     if (!audio.muted) return playOutput();
+  }
+  function setOutputDevice(deviceId) {
+    if (typeof deviceId !== "string") return Promise.reject(new TypeError("Audio output device ID must be a string."));
+    if (!audio || closing || disposed) return Promise.reject(new Error("Live is closed; output cannot be changed."));
+    // Silence before the async device change. Stop/Resume updates the desired
+    // mute state while routing is pending, rather than being undone on success.
+    outputSwitches++;
+    applyOutputMute();
+    const change = outputQueue.catch(() => {}).then(async () => {
+      try {
+        if (closing || disposed) throw new Error("Live closed before output could be changed.");
+        if (typeof audio.setSinkId !== "function") {
+          if (deviceId !== "") throw new Error("This browser cannot select an audio output. Use Chrome on localhost or HTTPS.");
+        } else {
+          await audio.setSinkId(deviceId);
+        }
+        if (closing || disposed) throw new Error("Live closed while output was changing.");
+        outputFailed = false;
+        state("output-device-selected", { deviceId });
+        return deviceId;
+      } catch (error) {
+        outputFailed = true;
+        if (!closing && !disposed) state("output-device-error", { message: `Audio output could not be selected: ${error.message}` });
+        throw error;
+      } finally {
+        outputSwitches--;
+        applyOutputMute();
+      }
+    });
+    outputQueue = change;
+    return change;
+  }
+  function reportOutputActivity(active) {
+    if (outputActive === active) return;
+    outputActive = active;
+    onOutputActivity?.(active);
+  }
+  function observeOutputActivity() {
+    if (!onOutputActivity || !audio?.srcObject) return;
+    clearInterval(activityTimer);
+    activitySource?.disconnect();
+    try {
+      activityContext ??= new AudioContext();
+      const analyser = activityContext.createAnalyser();
+      analyser.fftSize = 512;
+      const samples = new Float32Array(analyser.fftSize);
+      activitySource = activityContext.createMediaStreamSource(audio.srcObject);
+      // Never connect this observer to a speaker. Playback uses only audio's sink.
+      activitySource.connect(analyser);
+      activityTimer = setInterval(() => {
+        if (disposed || closing || audio.muted || activityContext.state !== "running") {
+          reportOutputActivity(false);
+          return;
+        }
+        analyser.getFloatTimeDomainData(samples);
+        const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
+        reportOutputActivity(rms > 0.01);
+      }, 100);
+    } catch {
+      state("output-activity-unavailable", { message: "Automatic reply silence detection is unavailable; use Stop speaking." });
+    }
   }
   function cleanup(result) {
     if (disposed) return;
@@ -87,6 +162,10 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     clearTimeout(startTimer);
     clearTimeout(closeTimer);
     clearTimeout(disconnectTimer);
+    clearInterval(activityTimer);
+    activitySource?.disconnect();
+    activityContext?.close().catch(() => {});
+    reportOutputActivity(false);
     pending.abort(new DOMException("Live connection closed.", "AbortError"));
     for (const remove of listeners) remove();
     stream.getTracks().forEach((track) => track.stop());
@@ -173,6 +252,7 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
       remoteTracks.add(track);
       if (track.kind !== "audio") { track.stop(); return; }
       audio.srcObject = new MediaStream([...remoteTracks].filter((item) => item.kind === "audio"));
+      observeOutputActivity();
       playOutput();
     });
     listen(peer, "connectionstatechange", () => {
@@ -225,6 +305,8 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     listen(channel, "close", () => fail(new Error("Live data channel closed without session.closed.")));
     listen(channel, "error", () => fail(new Error("Live data channel failed.")));
 
+    if (outputDeviceId !== "") await setOutputDevice(outputDeviceId);
+    pending.signal.throwIfAborted();
     const offer = await peer.createOffer();
     pending.signal.throwIfAborted();
     await peer.setLocalDescription(offer);
@@ -248,7 +330,10 @@ export async function connectLive({ stream, onEvent = () => {}, onState = () => 
     await peer.setRemoteDescription({ type: "answer", sdp: result.transport.sdp });
     await started;
     if (disposed || closing) throw new Error("Live closed during startup.");
-    return { sessionId, send, setInputEnabled, setOutputMuted, close };
+    return {
+      sessionId, send, setInputEnabled, setOutputMuted, setOutputDevice, close,
+      get outputDeviceId() { return audio.sinkId ?? ""; },
+    };
   } catch (error) {
     fail(error);
     throw error;

@@ -88,9 +88,12 @@ export function browser() {
     plays = 0;
     pauses = 0;
     rejectPlayback = false;
+    sinkId = "";
+    sinks = [];
     constructor() { audios.push(this); }
     async play() { this.plays++; if (this.rejectPlayback) throw new Error("Autoplay denied."); }
     pause() { this.pauses++; }
+    async setSinkId(deviceId) { this.sinks.push(deviceId); this.sinkId = deviceId; }
   }
   const environment = {
     window, calls, peers, audios, requests,

@@ -15,8 +15,10 @@ from chatty.integrations.gpt_live.executor import (
     ToolExecutor,
     ToolRegistry,
 )
+from chatty.integrations.meeting_vision import MeetingVisionClient, VisionError
 
 MAX_IDENTIFIER_LENGTH = 256
+MAX_VISION_BODY_BYTES = 384 * 1024
 STATIC_EXTENSIONS = {
     ".html",
     ".js",
@@ -76,10 +78,22 @@ def required_string(body: dict, key: str, maximum: int) -> str:
 
 
 class ChattyApp:
-    def __init__(self, settings: Settings, *, live_client=None, tool_factory=None):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        live_client=None,
+        tool_factory=None,
+        vision_client=None,
+    ):
         self.settings = settings
         self.live = live_client if live_client is not None else LiveClient(settings)
         self.tool_factory = tool_factory or ToolRegistry.from_module
+        self.vision = (
+            vision_client
+            if vision_client is not None
+            else MeetingVisionClient(settings)
+        )
         self.executor = ToolExecutor(settings)
         # Serializes capacity check + upstream creation + registration.
         self.creation_lock = threading.Lock()
@@ -127,9 +141,66 @@ class ChattyApp:
                 "invalid_arguments",
                 "arguments must be a parsed JSON object, not a JSON string.",
             )
+        if name == "read_meeting_screen":
+            raise ExecutorError(
+                400,
+                "screen_context_required",
+                "Enable incoming screen context and use the meeting vision endpoint.",
+            )
         return self.executor.execute(
             session_id, call_id, name, arguments, approved=approved
         )
+
+    def analyze_vision(self, body: dict) -> dict:
+        if set(body) != {"session_id", "call_id", "question", "frame"}:
+            raise ExecutorError(
+                400,
+                "invalid_request",
+                "Expected session_id, call_id, question, and frame.",
+            )
+        session_id = required_string(body, "session_id", MAX_IDENTIFIER_LENGTH)
+        call_id = required_string(body, "call_id", MAX_IDENTIFIER_LENGTH)
+        question = required_string(body, "question", 2000)
+        frame = body["frame"]
+        if not isinstance(frame, dict):
+            raise ExecutorError(
+                400, "invalid_frame", "Expected a JPEG snapshot object."
+            )
+
+        def describe():
+            # A request-local closure: neither pixels nor image URLs enter the
+            # executor fingerprint, saved result, or durable GitHub ledger.
+            try:
+                return self.vision.describe(frame, question)
+            except VisionError as error:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": error.code,
+                        "message": str(error),
+                        "retryable": False,
+                        "uncertain": False,
+                    },
+                }
+
+        # Validates the registered session/tool and reserves its call before
+        # paid analysis. Replays receive the first receipt, never another image call.
+        return self.executor.execute_vision(session_id, call_id, question, describe)
+
+    def capabilities(self) -> dict:
+        try:
+            tools = self.tool_factory()
+        except Exception:
+            raise ExecutorError(
+                503,
+                "invalid_tool_module",
+                "The repository and project tool capabilities could not be loaded.",
+            ) from None
+        if not tools.available:
+            raise ExecutorError(
+                503, "tools_unavailable", "Tool capabilities are unavailable."
+            )
+        return {"tools": tools.capabilities}
 
     def health(self) -> dict:
         try:
@@ -159,6 +230,7 @@ class LocalServer(ThreadingHTTPServer):
     def server_close(self) -> None:
         super().server_close()
         self.app.live.close()
+        self.app.vision.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -231,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(hosts) != 1 or hosts[0] not in self.server.allowed_hosts:
             raise ExecutorError(403, "invalid_host", "Use this app's localhost URL.")
 
-    def read_body(self) -> dict:
+    def read_body(self, *, maximum: int | None = None) -> dict:
         self.check_host()
         origins = self.headers.get_all("Origin", [])
         if origins != [f"http://{self.headers['Host']}"]:
@@ -256,11 +328,14 @@ class Handler(BaseHTTPRequestHandler):
                 400, "invalid_length", "A valid Content-Length is required."
             )
         length = int(lengths[0])
-        if not 0 < length <= self.server.app.settings.max_body_bytes:
+        maximum = (
+            self.server.app.settings.max_body_bytes if maximum is None else maximum
+        )
+        if not 0 < length <= maximum:
             raise ExecutorError(
                 413,
                 "request_too_large",
-                "Request body must be between 1 and 65536 bytes.",
+                f"Request body must be between 1 and {maximum} bytes.",
             )
         data = self.rfile.read(length)
         self.body_bytes_read = len(data)
@@ -272,11 +347,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
-            if self.path not in {"/api/live/session", "/api/tools/execute"}:
+            if self.path not in {
+                "/api/live/session",
+                "/api/tools/execute",
+                "/api/vision/analyze",
+            }:
                 raise ExecutorError(404, "not_found", "Unknown endpoint.")
-            body = self.read_body()
+            body = self.read_body(
+                maximum=MAX_VISION_BODY_BYTES
+                if self.path == "/api/vision/analyze"
+                else None
+            )
             if self.path == "/api/live/session":
                 self.json_reply(201, self.server.app.create_session(body))
+            elif self.path == "/api/vision/analyze":
+                self.json_reply(200, self.server.app.analyze_vision(body))
             else:
                 self.json_reply(200, self.server.app.execute_tool(body))
         except (ExecutorError, LiveError) as error:
@@ -296,6 +381,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.check_host()
             path = unquote(urlsplit(self.path).path)
+            if path == "/api/capabilities":
+                self.json_reply(200, self.server.app.capabilities())
+                return
             if path == "/api/health":
                 self.json_reply(200, self.server.app.health())
                 return

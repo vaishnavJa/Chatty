@@ -158,3 +158,91 @@ def test_unapproved_expired_call_does_not_pin_session_capacity(settings):
     now[0] = 11
     executor.ensure_capacity()
     assert executor.sessions == {}
+
+
+def test_project_change_uses_durable_approval_and_survives_executor_restart(
+    settings, tmp_path, monkeypatch
+):
+    from chatty.integrations.github import project_tools
+
+    calls = []
+
+    def update(name, arguments):
+        calls.append((name, arguments))
+        return {"item_id": arguments["item_id"], "value": arguments["value"]}
+
+    monkeypatch.setattr(project_tools, "execute", update)
+    settings = replace(
+        settings, ledger_path=tmp_path / "private-project" / "ledger.sqlite3"
+    )
+    executor = ToolExecutor(settings)
+    executor.register("project-session", ToolRegistry.from_module())
+    arguments = {"item_id": "PVTI_demo", "field_name": "Status", "value": "In progress"}
+    denied = executor.execute(
+        "project-session", "project-call", "update_project_item", arguments
+    )
+    assert json.loads(denied["output"])["error"]["code"] == "authorization_required"
+    assert not settings.ledger_path.exists()
+    assert calls == []
+    accepted = executor.execute(
+        "project-session",
+        "project-call",
+        "update_project_item",
+        arguments,
+        approved=True,
+    )
+    assert json.loads(accepted["output"])["ok"] is True
+    assert settings.ledger_path.is_file()
+    resumed = ToolExecutor(settings)
+    resumed.register("project-session", ToolRegistry.from_module())
+    assert (
+        resumed.execute(
+            "project-session",
+            "project-call",
+            "update_project_item",
+            arguments,
+            approved=True,
+        )
+        == accepted
+    )
+    assert calls == [("update_project_item", arguments)]
+
+
+def test_project_write_uncertainty_is_durable(settings, tmp_path, monkeypatch):
+    from chatty.integrations.github import project_tools
+
+    calls = []
+
+    def unknown(*args):
+        calls.append(args)
+        raise TimeoutError("Private project detail must stay private")
+
+    monkeypatch.setattr(project_tools, "execute", unknown)
+    settings = replace(
+        settings, ledger_path=tmp_path / "private-project" / "ledger.sqlite3"
+    )
+    arguments = {"item_id": "PVTI_demo", "field_name": "Status", "value": "Done"}
+    original = ToolExecutor(settings)
+    original.register("project-session", ToolRegistry.from_module())
+    first = original.execute(
+        "project-session",
+        "project-call",
+        "update_project_item",
+        arguments,
+        approved=True,
+    )
+    assert json.loads(first["output"])["error"]["uncertain"] is True
+    assert "Private project detail" not in first["output"]
+    resumed = ToolExecutor(settings)
+    resumed.register("project-session", ToolRegistry.from_module())
+    assert (
+        resumed.execute(
+            "project-session",
+            "project-call",
+            "update_project_item",
+            arguments,
+            approved=True,
+        )
+        == first
+    )
+    assert len(calls) == 1

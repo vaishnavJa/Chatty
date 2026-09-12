@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { DemoController, githubLinks } from '../../web/controller.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function fixture({ source = 'microphone', execute, attach = true } = {}) {
+function fixture({ source = 'microphone', execute, capabilities, timers, now, attach = true } = {}) {
   const sent = [], muted = [], inputs = [], requests = [], errors = [];
   const handle = { sessionId: 'live_test', send: event => sent.push(event), setOutputMuted: value => muted.push(value), setInputEnabled: value => inputs.push(value), close() {} };
-  const controller = new DemoController({ source, onError: error => errors.push(error), execute: execute ?? (async body => {
+  const controller = new DemoController({ source, ...(timers ? { timers, now } : {}), ...(capabilities !== undefined ? { capabilities } : {}), onError: error => errors.push(error), execute: execute ?? (async body => {
     requests.push(body);
     return { call_id: body.call_id, output: JSON.stringify({ ok: true, data: { url: 'https://github.com/vaishnavJa/Chatty/issues/42' } }) };
   }) });
@@ -281,4 +281,255 @@ test('a fresh delegation after Resume may execute independently of canceled work
   await flush();
   assert.equal(f.requests.length, 1);
   assert.equal(continuations(f).length, 1);
+});
+
+const expandedCapabilities = {
+  update_issue: { label: 'Edit GitHub issue', requires_approval: true, destructive: false },
+  update_project_item: { label: 'Update project item', requires_approval: true, destructive: false },
+  delete_repository_file: { label: 'Delete repository file', requires_approval: true, destructive: true },
+  get_issue: { label: 'Read issue', requires_approval: false, destructive: false },
+};
+const changes = [
+  ['update_issue', { issue_number: 8, title: 'Revised title', body: 'Exact public content', labels: ['demo'] }],
+  ['update_project_item', { item_id: 'item-demo', field_name: 'Status', value: 'In progress' }],
+  ['delete_repository_file', { path: 'obsolete.md', branch: 'codex/demo', expected_sha: 'a'.repeat(40), message: 'Remove obsolete guide' }],
+];
+
+for (const [name, args] of changes) {
+  test(`${name} requires exact application approval and executes once`, async () => {
+    const f = fixture({ capabilities: expandedCapabilities });
+    f.created(); f.call('change', name, { ...args, approved: true }); f.completed();
+    await flush();
+    assert.equal(f.requests.length, 0);
+    const proposed = f.controller.calls.get('change');
+    assert.equal(proposed.status, 'approval');
+    assert.equal(proposed.capability.label, expandedCapabilities[name].label);
+    assert.equal(proposed.capability.destructive, expandedCapabilities[name].destructive);
+    assert.deepEqual(proposed.arguments, args);
+    assert.ok(Object.isFrozen(proposed.arguments));
+    assert.throws(() => { proposed.arguments.title = 'Different'; }, TypeError);
+    if (proposed.arguments.labels) assert.throws(() => proposed.arguments.labels.push('unreviewed'), TypeError);
+    f.controller.approve('change'); f.controller.approve('change');
+    await flush();
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.requests[0].approved, true);
+    assert.deepEqual(f.requests[0].arguments, args);
+    assert.equal(continuations(f).length, 1);
+  });
+
+  test(`Stop and End each prevent late ${name} approval`, async () => {
+    for (const end of [false, true]) {
+      const f = fixture({ capabilities: expandedCapabilities });
+      f.created(); f.call('change', name, args); f.completed();
+      if (end) f.controller.end();
+      else { f.controller.stop(); f.controller.resume(); }
+      f.controller.approve('change');
+      await flush();
+      assert.equal(f.requests.length, 0);
+      assert.equal(f.controller.calls.get('change').status, 'rejected');
+      assert.equal(continuations(f).length, 0);
+    }
+  });
+
+  test(`ending during ${name} keeps an uncertain receipt and ignores late completion`, async () => {
+    let resolve;
+    const f = fixture({ capabilities: expandedCapabilities, execute: () => new Promise(done => { resolve = done; }) });
+    f.created(); f.call('change', name, args); f.completed(); f.controller.approve('change');
+    f.controller.end();
+    resolve({ call_id: 'change', output: '{"ok":true}' });
+    await flush();
+    assert.equal(f.controller.calls.get('change').status, 'uncertain');
+    assert.match(f.controller.calls.get('change').message, /change may have completed/);
+    assert.equal(results(f).length, 0);
+    assert.equal(continuations(f).length, 0);
+  });
+}
+
+test('unknown tools fail closed even when the model supplies approval', async () => {
+  const f = fixture({ capabilities: expandedCapabilities });
+  f.created(); f.call('unknown', 'unregistered_operation', { approved: true, target: 'repo' }); f.completed();
+  await flush();
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.controller.calls.get('unknown').status, 'error');
+  assert.match(f.controller.calls.get('unknown').message, /Unknown tool capability/);
+});
+
+test('explicit capability manifests do not silently inherit legacy tool permission', async () => {
+  const f = fixture({ capabilities: expandedCapabilities });
+  f.created(); f.call('legacy', 'create_issue', { title: 'Unregistered', body: 'No inherited permission.' }); f.completed();
+  await flush();
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.controller.calls.get('legacy').status, 'error');
+});
+
+test('declared reads run directly with no approval field', async () => {
+  const f = fixture({ capabilities: expandedCapabilities });
+  f.created(); f.call('read', 'get_issue', { issue_number: 8 }); f.completed();
+  await flush();
+  assert.equal(f.requests.length, 1);
+  assert.equal('approved' in f.requests[0], false);
+  assert.equal(f.controller.calls.get('read').status, 'complete');
+});
+
+test('malformed or contradictory capability metadata cannot start a controller', () => {
+  for (const capabilities of [null, [], { update_issue: { label: 'Edit', requires_approval: 'true', destructive: false } }, { delete_repository_file: { label: 'Delete', requires_approval: false, destructive: true } }]) {
+    assert.throws(() => fixture({ capabilities }), /capabilities/);
+  }
+});
+
+test('a stopped in-flight project write can confirm but cannot restart backend work', async () => {
+  let resolve;
+  const f = fixture({ capabilities: expandedCapabilities, execute: () => new Promise(done => { resolve = done; }) });
+  f.created(); f.call('change', 'update_project_item', changes[1][1]); f.completed(); f.controller.approve('change');
+  f.controller.stop();
+  assert.match(f.controller.calls.get('change').message, /already approved/);
+  resolve({ call_id: 'change', output: '{"ok":true}' });
+  await flush();
+  assert.equal(f.controller.calls.get('change').status, 'complete');
+  assert.equal(continuations(f).length, 0);
+});
+
+test('failed edit remains uncertain with no automatic retry', async () => {
+  let count = 0;
+  const f = fixture({ capabilities: expandedCapabilities, execute: async () => { ++count; throw new Error('Connection lost'); } });
+  f.created(); f.call('change', 'update_issue', changes[0][1]); f.completed(); f.controller.approve('change');
+  await flush();
+  f.controller.approve('change'); f.call('change', 'update_issue', changes[0][1]);
+  await flush();
+  assert.equal(count, 1);
+  assert.equal(f.controller.calls.get('change').status, 'uncertain');
+  assert.match(f.controller.calls.get('change').message, /change may have completed/);
+});
+
+function clockFixture() {
+  let timestamp = 0, next = 0;
+  const jobs = new Map();
+  return {
+    now: () => timestamp,
+    timers: {
+      setTimeout(callback, delay) { const id = ++next; jobs.set(id, { callback, at: timestamp + delay }); return id; },
+      clearTimeout(id) { jobs.delete(id); },
+    },
+    tick(ms) {
+      const until = timestamp + ms;
+      while (true) {
+        const due = [...jobs].filter(([, job]) => job.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        timestamp = due[1].at;
+        jobs.delete(due[0]);
+        due[1].callback();
+      }
+      timestamp = until;
+    },
+  };
+}
+
+const speak = (f, delta) => f.controller.event({ type: 'session.input_transcript.delta', delta });
+
+test('the bare token Chatty wakes, and Chatty stop wins over that wake', () => {
+  const f = fixture({ source: 'meeting-tab' });
+  speak(f, 'Chat');
+  assert.equal(f.controller.speech, 'waiting');
+  speak(f, 'ty, what changed?');
+  assert.equal(f.controller.speech, 'listening');
+  speak(f, ' Chatty, stop.');
+  assert.equal(f.controller.speech, 'stopped');
+  speak(f, ' Stop Chatty.');
+  assert.equal(f.controller.speech, 'stopped');
+  speak(f, ' Chatty, show the issue.');
+  assert.equal(f.controller.speech, 'listening');
+});
+
+test('meeting returns quiet after one audible answer and ignores ordinary speech', async () => {
+  const clock = clockFixture();
+  const f = fixture({ source: 'meeting-tab', ...clock });
+  speak(f, 'Chatty, hello.');
+  f.controller.outputActivity(true);
+  clock.tick(500);
+  f.controller.outputActivity(false);
+  clock.tick(1499);
+  assert.equal(f.controller.speech, 'listening');
+  clock.tick(1);
+  assert.equal(f.controller.speech, 'waiting');
+  assert.equal(f.muted.at(-1), true);
+  speak(f, ' Now what should we do next?');
+  f.created(); f.call('ordinary'); f.completed();
+  await flush();
+  assert.equal(f.controller.speech, 'waiting');
+  assert.equal(f.requests.length, 0);
+  speak(f, ' Chatty, another question.');
+  assert.equal(f.controller.speech, 'listening');
+});
+
+test('interim checking speech and tool completion cannot cut off the final answer', async () => {
+  const clock = clockFixture();
+  let resolve;
+  const f = fixture({ source: 'meeting-tab', ...clock, execute: () => new Promise(done => { resolve = done; }) });
+  speak(f, 'Chatty, list the commits.');
+  f.created(); f.call('read'); f.completed();
+  f.controller.outputActivity(true);
+  f.controller.outputActivity(false);
+  clock.tick(2000);
+  assert.equal(f.controller.speech, 'listening');
+  resolve({ call_id: 'read', output: '{"ok":true}' });
+  await flush();
+  clock.tick(2000);
+  assert.equal(f.controller.speech, 'listening');
+  f.created('final_response'); f.completed('final_response');
+  clock.tick(2000);
+  assert.equal(f.controller.speech, 'listening');
+  f.controller.outputActivity(true); f.controller.outputActivity(false);
+  clock.tick(1500);
+  assert.equal(f.controller.speech, 'waiting');
+});
+
+test('an utterance already playing when a tool resolves does not count as final output', async () => {
+  const clock = clockFixture();
+  let resolve;
+  const f = fixture({ source: 'meeting-tab', ...clock, execute: () => new Promise(done => { resolve = done; }) });
+  speak(f, 'Chatty, check the repo.');
+  f.created(); f.call('read'); f.completed();
+  f.controller.outputActivity(true);
+  resolve({ call_id: 'read', output: '{"ok":true}' });
+  await flush();
+  f.created('final_response'); f.completed('final_response');
+  f.controller.outputActivity(false);
+  clock.tick(2000);
+  assert.equal(f.controller.speech, 'listening');
+  f.controller.outputActivity(true); f.controller.outputActivity(false);
+  clock.tick(1500);
+  assert.equal(f.controller.speech, 'waiting');
+});
+
+test('the bounded wake lease mutes even when output activity is unavailable', () => {
+  const clock = clockFixture();
+  const f = fixture({ source: 'meeting-tab', ...clock });
+  speak(f, 'Chatty, hello.');
+  clock.tick(89999);
+  assert.equal(f.controller.speech, 'listening');
+  clock.tick(1);
+  assert.equal(f.controller.speech, 'waiting');
+});
+
+test('microphone conversation stays active across output silence', () => {
+  const clock = clockFixture();
+  const f = fixture({ ...clock });
+  f.controller.outputActivity(true); f.controller.outputActivity(false);
+  clock.tick(100000);
+  assert.equal(f.controller.speech, 'listening');
+});
+
+test('old silence timers cannot close a newly resumed request', () => {
+  const clock = clockFixture();
+  const f = fixture({ source: 'meeting-tab', ...clock });
+  speak(f, 'Chatty, hello.');
+  f.controller.outputActivity(true); f.controller.outputActivity(false);
+  clock.tick(1000);
+  f.controller.stop();
+  speak(f, ' Chatty, start again.');
+  clock.tick(1000);
+  assert.equal(f.controller.speech, 'listening');
+  f.controller.end();
+  clock.tick(100000);
+  assert.equal(f.controller.active, false);
 });

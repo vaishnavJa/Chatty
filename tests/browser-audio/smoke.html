@@ -8,15 +8,20 @@
   <body>
     <h1>Chatty audio route check</h1>
     <p>This local check measures input and plays a short test tone. It does not contact OpenAI or record audio.</p>
-    <p>For Meet, present this tab with tab audio enabled. From here capture the Meet tab, also with tab audio enabled.</p>
+    <p>Chatty joins with voice only. Do not present this tab. Route output to a tested virtual audio device and select that device as Meet's microphone; keep Meet's speaker on headphones.</p>
+    <button id="devices">Refresh audio devices</button>
+    <button id="permission">Enable device selection (brief microphone permission)</button>
+    <p><label>Test tone output <select id="output"><option value="">System default (local test)</option></select></label></p>
     <label>Input <select id="source">
       <option value="meeting-tab">Meet tab</option>
       <option value="microphone">Microphone (local check)</option>
     </select></label>
+    <label>Local input device <select id="input-device"><option value="">Default microphone</option></select></label>
     <button id="start">Start capture</button>
     <button id="stop" disabled>Stop capture</button>
     <button id="tone">Play test tone</button>
     <p><label>Input level <meter id="level" min="0" max="1" value="0"></meter></label></p>
+    <p id="peak">Peak level: 0.0000</p>
     <p id="status" role="status">Idle. Capture starts only when you click Start.</p>
     <p>A second-device participant should hear the tone. Their speech should move the meter. The test tone should not move the meter by itself.</p>
     <script type="module" src="./smoke.js"></script>

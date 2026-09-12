@@ -289,3 +289,169 @@ test("pre-start model audio remains muted until explicit UI permission", async (
   assert.equal(f.env.audios[0].plays, 1);
   finalized(f);
 });
+
+test("selected output is applied before negotiation without enabling speech", async (t) => {
+  const f = setup(t, { outputDeviceId: "virtual-cable" });
+  const live = await ready(f);
+  assert.equal(live.outputDeviceId, "virtual-cable");
+  assert.deepEqual(f.env.audios[0].sinks, ["virtual-cable"]);
+  assert.equal(f.env.audios[0].muted, true);
+  assert.equal(f.env.audios[0].plays, 0);
+  assert.ok(f.states.some((event) => event.state === "output-device-selected" && event.deviceId === "virtual-cable"));
+  finalized(f);
+});
+
+test("failed startup output selection releases input without opening an API session", async (t) => {
+  const f = setup(t, { outputDeviceId: "removed-cable" });
+  f.env.audios[0].setSinkId = async () => { throw new DOMException("Cable unavailable.", "NotFoundError"); };
+  await assert.rejects(f.connecting, /Cable unavailable/);
+  assert.equal(f.env.requests.length, 0);
+  assert.equal(f.input.readyState, "ended");
+  assert.equal(f.peer.closed, true);
+  assert.equal(f.env.audios[0].muted, true);
+});
+
+test("Stop during a pending device switch cannot be undone by its completion", async (t) => {
+  const f = setup(t);
+  const live = await ready(f);
+  const audio = f.env.audios[0];
+  f.peer.receiveTrack(new Track());
+  await live.setOutputMuted(false);
+  let finish;
+  audio.setSinkId = (deviceId) => new Promise((resolve) => { finish = () => { audio.sinkId = deviceId; resolve(); }; });
+  const changing = live.setOutputDevice("virtual-cable");
+  assert.equal(audio.muted, true);
+  await flush();
+  live.setOutputMuted(true);
+  finish();
+  await changing;
+  assert.equal(audio.muted, true);
+  await live.setOutputMuted(false);
+  assert.equal(audio.muted, false);
+  finalized(f);
+});
+
+test("device selection failures stay silent until routing is explicitly repaired", async (t) => {
+  const f = setup(t);
+  const live = await ready(f);
+  const audio = f.env.audios[0];
+  audio.setSinkId = async () => { throw new DOMException("Device removed.", "NotFoundError"); };
+  await assert.rejects(live.setOutputDevice("missing"), /Device removed/);
+  live.setOutputMuted(false);
+  f.peer.receiveTrack(new Track());
+  assert.equal(audio.muted, true);
+  assert.equal(audio.plays, 0);
+  assert.equal(f.states.at(-1).state, "output-device-error");
+  audio.setSinkId = async (deviceId) => { audio.sinkId = deviceId; };
+  await live.setOutputDevice("cable");
+  assert.equal(audio.muted, false);
+  assert.equal(live.outputDeviceId, "cable");
+  finalized(f);
+});
+
+test("concurrent output changes are serialized and remain muted until the last selection", async (t) => {
+  const f = setup(t);
+  const live = await ready(f);
+  const audio = f.env.audios[0];
+  const pending = [];
+  audio.setSinkId = (deviceId) => new Promise((resolve) => { pending.push(() => { audio.sinkId = deviceId; resolve(); }); });
+  const first = live.setOutputDevice("first");
+  const last = live.setOutputDevice("last");
+  await live.setOutputMuted(false);
+  await flush();
+  assert.equal(pending.length, 1);
+  pending[0]();
+  await first;
+  assert.equal(audio.muted, true);
+  await flush();
+  assert.equal(pending.length, 2);
+  pending[1]();
+  await last;
+  assert.equal(audio.muted, false);
+  assert.equal(live.outputDeviceId, "last");
+  finalized(f);
+});
+
+test("close during output selection cannot resume playback or accept another selection", async (t) => {
+  const f = setup(t);
+  const live = await ready(f);
+  const audio = f.env.audios[0];
+  let finish;
+  audio.setSinkId = () => new Promise((resolve) => { finish = resolve; });
+  const changing = live.setOutputDevice("cable");
+  await flush();
+  live.setOutputMuted(false);
+  const closed = live.close();
+  finish();
+  await assert.rejects(changing, /closed/);
+  await assert.rejects(live.setOutputDevice("cable"), /closed/);
+  assert.equal(audio.muted, true);
+  finalized(f);
+  await closed;
+  assert.equal(audio.srcObject, null);
+});
+
+test("unsupported output selection cannot silently fall back to laptop speakers", async (t) => {
+  const f = setup(t);
+  const live = await ready(f);
+  f.env.audios[0].setSinkId = undefined;
+  await assert.rejects(live.setOutputDevice("cable"), /cannot select/);
+  live.setOutputMuted(false);
+  assert.equal(f.env.audios[0].muted, true);
+  await live.setOutputDevice("");
+  assert.equal(f.env.audios[0].muted, false);
+  finalized(f);
+});
+
+test("output activity observes only remote audio and stops with mute/cleanup", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let level = 0.05;
+  let observer;
+  let source;
+  const context = {
+    state: "running",
+    createAnalyser() { observer = { getFloatTimeDomainData: (samples) => samples.fill(level) }; return observer; },
+    createMediaStreamSource(stream) {
+      assert.deepEqual(stream.getTracks(), [remote]);
+      source = { connect: (node) => assert.equal(node, observer), disconnect: () => {} };
+      return source;
+    },
+    async close() { this.state = "closed"; },
+  };
+  const restore = replaceGlobals({ AudioContext: class { constructor() { return context; } } });
+  t.after(restore);
+  const changes = [];
+  const f = setup(t, { onOutputActivity: (active) => changes.push(active) });
+  const live = await ready(f);
+  const remote = new Track();
+  f.peer.receiveTrack(remote);
+  t.mock.timers.tick(100);
+  assert.deepEqual(changes, []);
+  await live.setOutputMuted(false);
+  t.mock.timers.tick(100);
+  assert.deepEqual(changes, [true]);
+  level = 0;
+  t.mock.timers.tick(100);
+  assert.deepEqual(changes, [true, false]);
+  level = 0.05;
+  t.mock.timers.tick(100);
+  live.setOutputMuted(true);
+  assert.deepEqual(changes, [true, false, true, false]);
+  finalized(f);
+  assert.equal(context.state, "closed");
+  t.mock.timers.tick(1000);
+  assert.equal(changes.length, 4);
+});
+
+test("unavailable activity detection leaves voice transport working with visible fallback", async (t) => {
+  const restore = replaceGlobals({ AudioContext: undefined });
+  t.after(restore);
+  const f = setup(t, { onOutputActivity: () => {} });
+  const live = await ready(f);
+  f.peer.receiveTrack(new Track());
+  assert.equal(f.states.at(-1).state, "output-activity-unavailable");
+  await live.setOutputMuted(false);
+  assert.equal(f.env.audios[0].muted, false);
+  assert.equal(f.env.audios[0].plays, 1);
+  finalized(f);
+});

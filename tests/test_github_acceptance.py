@@ -48,9 +48,19 @@ class GitHubAcceptanceTests(unittest.TestCase):
         self.assertIsInstance(response["output"], str)
         return json.loads(response["output"])
 
-    def test_schemas_expose_only_four_bounded_tools(self):
-        schemas = {schema["name"]: schema for schema in TOOL_SCHEMAS}
-        self.assertEqual(len(TOOL_SCHEMAS), 4)
+    def test_legacy_schemas_remain_bounded_with_the_expanded_registry(self):
+        legacy_names = {
+            "list_recent_commits",
+            "list_open_pull_requests",
+            "list_open_issues",
+            "create_issue",
+        }
+        schemas = {
+            schema["name"]: schema
+            for schema in TOOL_SCHEMAS
+            if schema["name"] in legacy_names
+        }
+        self.assertEqual(len(schemas), 4)
         self.assertEqual(
             set(schemas),
             {

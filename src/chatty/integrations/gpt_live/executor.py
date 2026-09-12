@@ -17,17 +17,16 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 
+from chatty.agents.tools import (
+    READ_TOOL_NAMES,
+    TOOL_CAPABILITIES,
+    TOOLS,
+    WRITE_TOOL_NAMES,
+)
 from chatty.config import Settings
 from chatty.integrations.github.dedup import CallLedger
 
-ALLOWED_TOOLS = frozenset(
-    {
-        "list_recent_commits",
-        "list_open_pull_requests",
-        "list_open_issues",
-        "create_issue",
-    }
-)
+ALLOWED_TOOLS = frozenset(TOOLS)
 
 
 class ExecutorError(Exception):
@@ -53,6 +52,7 @@ class ToolRegistry:
         self.execute_call = execute_call
         self.available = available
         self.validators = {}
+        self.capabilities = {}
         for schema in self.schemas:
             name = schema.get("name")
             if (
@@ -64,6 +64,23 @@ class ToolRegistry:
                 raise ValueError("Invalid GitHub tool schema")
             Draft202012Validator.check_schema(schema["parameters"])
             self.validators[name] = Draft202012Validator(schema["parameters"])
+            capability = TOOL_CAPABILITIES.get(name)
+            if (
+                not isinstance(capability, dict)
+                or not isinstance(capability.get("label"), str)
+                or not capability["label"].strip()
+                or type(capability.get("requires_approval")) is not bool
+                or type(capability.get("destructive")) is not bool
+                or capability["requires_approval"] != (name in WRITE_TOOL_NAMES)
+                or (name not in READ_TOOL_NAMES and name not in WRITE_TOOL_NAMES)
+                or (capability["destructive"] and not capability["requires_approval"])
+            ):
+                raise ValueError("Invalid GitHub tool capability")
+            # Only public presentation metadata belongs in the browser manifest.
+            self.capabilities[name] = {
+                key: capability[key]
+                for key in ("label", "requires_approval", "destructive")
+            }
         if self.schemas and not (callable(execute_call) or callable(execute_tool)):
             raise ValueError("A tool runner must be callable")
 
@@ -104,7 +121,7 @@ class ToolRegistry:
         ledger,
     ) -> Any:
         if self.execute_call is not None:
-            if name == "create_issue":
+            if name in WRITE_TOOL_NAMES:
                 Path(ledger.path).parent.mkdir(parents=True, exist_ok=True)
             result = self.execute_call(
                 session_id,
@@ -178,6 +195,22 @@ class ToolExecutor:
             if session_id not in self.sessions:
                 self.sessions[session_id] = Session(self.clock(), tools)
 
+    def execute_vision(
+        self, session_id: str, call_id: str, question: str, describe
+    ) -> dict:
+        """Run a context-bearing read through this session's existing call ledger.
+
+        The callback owns the frame only for this request. Fingerprints contain
+        the question, never image bytes, and results cache only the text receipt.
+        """
+        return self.execute(
+            session_id,
+            call_id,
+            "read_meeting_screen",
+            {"question": question},
+            _vision_runner=describe,
+        )
+
     def execute(
         self,
         session_id: str,
@@ -186,7 +219,10 @@ class ToolExecutor:
         arguments: dict,
         *,
         approved=False,
+        _vision_runner=None,
     ) -> dict:
+        if _vision_runner is not None and name != "read_meeting_screen":
+            raise ValueError("Only the screen tool may use the vision runner")
         if type(approved) is not bool:
             raise ExecutorError(400, "invalid_approval", "Approval must be a boolean.")
         # Compute before tool execution so any mutation by a tool cannot change
@@ -221,7 +257,7 @@ class ToolExecutor:
                     )
                 call = Call(fingerprint)
                 session.calls[call_id] = call  # Reserve BEFORE any side effect.
-            if name == "create_issue" and not approved and not call.started:
+            if name in WRITE_TOOL_NAMES and not approved and not call.started:
                 # Bind the exact proposed payload but do not cache a final denial:
                 # the human may approve this same call after reviewing it in UI.
                 return {
@@ -231,7 +267,7 @@ class ToolExecutor:
                             "ok": False,
                             "error": {
                                 "code": "authorization_required",
-                                "message": "Review the exact issue title and body, then click Create issue.",
+                                "message": "Review the exact proposed change and target, then click Approve change.",
                                 "uncertain": False,
                             },
                         }
@@ -241,13 +277,17 @@ class ToolExecutor:
             call.started = True
         if owner:
             try:
-                result = session.tools.run(
-                    session_id,
-                    call_id,
-                    name,
-                    copy.deepcopy(arguments),
-                    approved=approved,
-                    ledger=self.ledger,
+                result = (
+                    _vision_runner()
+                    if _vision_runner is not None
+                    else session.tools.run(
+                        session_id,
+                        call_id,
+                        name,
+                        copy.deepcopy(arguments),
+                        approved=approved,
+                        ledger=self.ledger,
+                    )
                 )
                 # Permit a structured object or an already-serialized JSON result.
                 if isinstance(result, str):
@@ -262,8 +302,11 @@ class ToolExecutor:
                         "ok": False,
                         "error": {
                             "code": "tool_execution_failed",
-                            "message": "The tool did not return a confirmed result. Check GitHub before requesting the action again.",
+                            "message": "Screen analysis did not return a confirmed result. Ask again with a fresh snapshot."
+                            if name == "read_meeting_screen"
+                            else "The tool did not return a confirmed result. Check GitHub before requesting the action again.",
                             "retryable": False,
+                            "uncertain": name in WRITE_TOOL_NAMES,
                         },
                     }
                 )

@@ -14,6 +14,7 @@ DEFAULT_REPOSITORY = "vaishnavJa/Chatty"
 class Settings:
     api_key: str = field(default="", repr=False)
     backend_model: str = "gpt-5.6-terra"
+    vision_model: str = "gpt-5.6-terra"
     repository: str = DEFAULT_REPOSITORY
     port: int = 3000
     web_dir: Path = PROJECT_ROOT / "web"
@@ -40,6 +41,9 @@ class Settings:
         backend = os.getenv("OPENAI_BACKEND_MODEL", "gpt-5.6-terra").strip()
         if not backend:
             raise ValueError("OPENAI_BACKEND_MODEL must not be empty")
+        vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-terra").strip()
+        if not vision_model:
+            raise ValueError("OPENAI_VISION_MODEL must not be empty")
         web_dir = Path(os.getenv("CHATTY_WEB_DIR", "web"))
         if not web_dir.is_absolute():
             web_dir = root / web_dir
@@ -54,6 +58,7 @@ class Settings:
         return cls(
             api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             backend_model=backend,
+            vision_model=vision_model,
             repository=repository,
             port=port,
             web_dir=web_dir.resolve(),

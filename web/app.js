@@ -1,20 +1,24 @@
-import { captureInput } from './media.js';
+import { captureInput, listAudioOutputs, requestAudioOutputs } from './media.js';
+import { createMeetingVision } from './vision.js';
 import { connectLive } from './live.js';
-import { DemoController } from './controller.js';
+import { DemoController, reviewTarget, validateCapabilities } from './controller.js';
 
 const $ = id => document.getElementById(id);
 const controls = {
   start: $('start-button'), stop: $('stop-button'), resume: $('resume-button'),
+  output: $('output-device'), devices: $('audio-devices-button'), vision: $('screen-context'),
   end: $('end-button'), summary: $('summary-button'), download: $('download-button'), source: $('audio-source'),
 };
 let current = null;
 let displayed = null;
 let phase = 'idle';
 let health = null;
+let capabilities = null;
+let outputs = [];
+let loadingDevices = false;
 let lastError = '';
 let sequence = 0;
 const toolViews = new WeakMap();
-const toolLabels = { list_open_pull_requests: 'Open pull requests', list_open_issues: 'Open issues', get_recent_commits: 'Recent commits', list_recent_commits: 'Recent commits', get_open_pull_requests: 'Open pull requests', list_pull_requests: 'Pull requests', search_repo: 'Search repository', search_repository: 'Search repository', create_issue: 'Create GitHub issue' };
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -29,12 +33,49 @@ function showError(message) {
 }
 function clearError() { lastError = ''; $('error-banner').hidden = true; }
 function active(controller) { return current?.controller === controller && controller.active; }
+function loopbackOutput(device) {
+  return device && !['', 'default', 'communications'].includes(device.deviceId)
+    && /microsoft teams audio|blackhole|loopback|soundflower|vb.?audio|virtual|cable/i.test(device.label);
+}
+function chosenOutput() { return outputs.find(device => device.deviceId === controls.output.value); }
+function refreshOutputs(devices) {
+  const chosen = controls.output.value;
+  outputs = devices;
+  const meeting = controls.source.value === 'meeting-tab';
+  const placeholder = element('option', '', meeting ? 'Choose a virtual audio output' : 'System default · microphone test');
+  placeholder.value = '';
+  const options = devices.filter(device => device.deviceId && device.deviceId !== 'default').map(device => {
+    const option = element('option', '', device.label || 'Audio output (enable devices to identify)');
+    option.value = device.deviceId;
+    option.disabled = meeting && !loopbackOutput(device);
+    return option;
+  });
+  controls.output.replaceChildren(placeholder, ...options);
+  if (devices.some(device => device.deviceId === chosen && (!meeting || loopbackOutput(device)))) controls.output.value = chosen;
+  renderStatus();
+}
+async function enableAudioDevices() {
+  if (current || loadingDevices) return;
+  loadingDevices = true; renderStatus();
+  try { refreshOutputs(await requestAudioOutputs()); }
+  catch (error) { showError(error.message); }
+  finally { loadingDevices = false; renderStatus(); }
+}
 
 function renderStatus() {
   const ready = phase === 'ready' && !!current?.controller.handle;
   const busy = !!current;
   const speech = displayed?.speech;
-  controls.start.disabled = busy || health?.openai_configured === false;
+  const meeting = controls.source.value === 'meeting-tab';
+  controls.start.disabled = busy || loadingDevices || health?.openai_configured !== true || !capabilities || (meeting && !loopbackOutput(chosenOutput()));
+  controls.output.disabled = busy || loadingDevices;
+  controls.devices.disabled = busy || loadingDevices;
+  controls.devices.textContent = loadingDevices ? 'Enabling devices…' : 'Enable audio devices';
+  controls.vision.disabled = !meeting || (busy && !current?.vision);
+  $('output-help').textContent = meeting ? 'Choose a virtual audio device, then use the same device as your unmuted Meet microphone. Keep Meet speakers on normal speakers or headphones.' : 'Microphone tests play through the selected output.';
+  if (current?.outputActivityAvailable === false) $('output-help').textContent += ' Answer-end detection is unavailable: use Stop speaking; each wake expires after 90 seconds.';
+  const visionStates = { ready: 'Screen context enabled. A snapshot is sent only for a screen question.', analyzing: 'Reading the requested meeting snapshot…', unavailable: 'The incoming screen source is unavailable.', off: 'Screen context is off.' };
+  $('screen-context-status').textContent = current?.vision ? visionStates[current.visionState] ?? 'Preparing incoming screen context…' : controls.vision.checked ? 'A single current snapshot will be sent only when you ask about the screen.' : 'Off. Enable before starting a meeting session. One snapshot is sent only when you ask about the screen.';
   controls.source.disabled = busy;
   controls.stop.disabled = !ready || speech === 'stopped';
   controls.resume.disabled = !ready;
@@ -55,8 +96,8 @@ function renderStatus() {
     title = phase === 'capturing' ? 'Choose what Chatty hears.' : phase === 'connecting' ? 'Making the connection.' : 'Listening to the conversation.';
     description = phase === 'capturing' ? 'Allow microphone access, or select the meeting tab with audio.' : phase === 'connecting' ? 'Connecting your audio to OpenAI Live.' : 'Ask about your project or request an action.';
     input = ready ? `${current.source === 'microphone' ? 'Microphone' : 'Meeting tab'} on · replies enabled` : 'Preparing audio';
-    if (ready && speech === 'waiting') { title = 'Listening for “Hey Chatty”.'; description = 'Wake Chatty when you need project context or an action.'; input = 'Meeting audio on · replies muted'; }
-    if (ready && speech === 'stopped') { title = 'Quiet, until you need me.'; description = 'Say “Hey Chatty” or click Resume to hear replies again.'; input = 'Input on · replies muted'; }
+    if (ready && speech === 'waiting') { title = 'Listening for “Chatty”.'; description = 'Wake Chatty when you need project context or an action.'; input = 'Meeting audio on · replies muted'; }
+    if (ready && speech === 'stopped') { title = 'Quiet, until you need me.'; description = 'Say “Chatty” or click Resume to hear replies again.'; input = 'Input on · replies muted'; }
     if (phase === 'reconnecting') { title = 'Reconnecting…'; description = 'The audio connection was interrupted.'; input = 'Connection interrupted'; }
   } else if (phase === 'error') { title = 'Let’s reconnect.'; description = 'Check the error above, then start a new session.'; }
   else if (phase === 'closed') { title = 'Conversation saved on this page.'; description = 'Download the transcript or start a fresh session.'; }
@@ -105,20 +146,21 @@ function renderTools(controller) {
   const container = $('tool-activity');
   $('action-count').textContent = String(controller.calls.size);
   if (!controller.calls.size) return;
-  const labels = { pending: 'Pending', running: 'Working…', approval: 'Review required', complete: 'Confirmed', error: 'Failed', rejected: 'Not created', uncertain: 'Check GitHub', canceled: 'Canceled' };
+  const labels = { pending: 'Pending', running: 'Working…', approval: 'Review required', complete: 'Confirmed', error: 'Failed', rejected: 'Not applied', uncertain: 'Check GitHub', canceled: 'Canceled' };
   const cards = [...controller.calls.values()].reverse().map(call => {
     const card = element('article', `tool-card ${call.status}`);
     const heading = element('div', 'tool-heading');
-    heading.append(element('strong', '', toolLabels[call.name] ?? call.name.replaceAll('_', ' ')), element('span', 'tool-state', labels[call.status] ?? call.status));
+    heading.append(element('strong', '', call.capability?.label ?? call.name.replaceAll('_', ' ')), element('span', 'tool-state', labels[call.status] ?? call.status));
     card.append(heading);
-    if (call.name === 'create_issue') {
-      card.append(element('p', '', call.arguments.title ?? 'Issue request'));
+    if (call.capability?.requires_approval) {
+      card.append(element('p', '', `Target: ${reviewTarget(call)}`));
       if (call.status === 'approval') {
-        card.append(element('pre', 'tool-body', call.arguments.body));
+        card.append(element('pre', 'tool-body', JSON.stringify(call.arguments, null, 2)));
+        if (call.capability.destructive) card.append(element('p', '', 'Destructive change: review every proposed field before approving. This can remove data or change repository history.'));
         const buttons = element('div', 'approval-actions');
-        const approve = element('button', 'button primary', 'Create issue');
+        const approve = element('button', 'button primary', call.capability.destructive ? 'Approve destructive change' : 'Approve change');
         const reject = element('button', 'button', 'Reject');
-        approve.disabled = !active(controller) || controller.speech !== 'listening';
+        approve.disabled = !active(controller) || controller.speech !== 'listening' || controller.groups.get(call.key)?.blocked;
         reject.disabled = !active(controller);
         approve.addEventListener('click', () => controller.approve(call.call_id));
         reject.addEventListener('click', () => controller.reject(call.call_id));
@@ -143,6 +185,10 @@ function renderTools(controller) {
 }
 function render(controller) {
   if (controller !== displayed) return;
+  if (active(controller) && current.lastSpeech !== controller.speech) {
+    current.lastSpeech = controller.speech;
+    if (controller.speech !== 'listening') current.vision?.clear();
+  }
   renderStatus(); renderCaptions(controller); renderTools(controller);
 }
 async function executeTool(body, signal) {
@@ -160,34 +206,40 @@ async function executeTool(body, signal) {
 }
 function resetViews() {
   $('captions').replaceChildren(element('div', 'empty-state', 'Listening captions will appear here.'));
-  $('tool-activity').replaceChildren(element('div', 'activity-empty', 'Repository lookups and issue receipts will appear here.'));
+  $('tool-activity').replaceChildren(element('div', 'activity-empty', 'Repository and project lookups and change receipts will appear here.'));
   $('action-count').textContent = '0';
   $('caption-count').textContent = 'Live captions';
 }
 
 async function startSession() {
-  if (current) return;
+  if (current || health?.openai_configured !== true || !capabilities || (controls.source.value === 'meeting-tab' && !loopbackOutput(chosenOutput()))) return;
   clearError();
   const source = controls.source.value;
-  const run = { id: ++sequence, source, abort: new AbortController(), capture: null, handle: null, controller: null };
-  run.controller = new DemoController({ source, execute: executeTool, onChange: render, onError: message => { if (current === run) showError(message); } });
+  const run = { id: ++sequence, source, outputDeviceId: controls.output.value, screenContext: controls.vision.checked, abort: new AbortController(), capture: null, handle: null, controller: null, vision: null, visionState: 'off' };
+  run.controller = new DemoController({ source, capabilities, execute: (body, signal) => {
+    if (body.name !== 'read_meeting_screen') return executeTool(body, signal);
+    if (!run.vision?.enabled || current !== run) throw new Error('Incoming screen context is off. Enable it before starting a meeting session.');
+    return run.vision.analyze(body.arguments.question, { callId: body.call_id, signal });
+  }, onChange: render, onError: message => { if (current === run) showError(message); } });
   current = run; displayed = run.controller; phase = 'capturing'; resetViews(); renderStatus();
   try {
     // Call capture directly from the Start gesture, before any network await.
-    const capture = await captureInput(source);
+    const capture = await captureInput(source, { keepVideo: source === 'meeting-tab' && run.screenContext });
     if (current !== run) { capture.stop(); return; }
     run.capture = capture;
     phase = 'connecting'; renderStatus();
     const handle = await connectLive({
-      stream: capture.stream, signal: run.abort.signal,
+      stream: capture.stream, signal: run.abort.signal, outputDeviceId: run.outputDeviceId,
+      onOutputActivity: value => run.controller.outputActivity(value),
       onEvent: event => run.controller.event(event),
       onState: (state, details = {}) => {
         if (current !== run) return;
         if (state === 'error') showError(details.message);
+        if (state === 'output-activity-unavailable') run.outputActivityAvailable = false;
         if (state === 'playback-blocked') showError(details.message ?? 'Click Resume to allow audio playback.');
         if (state === 'connecting' || state === 'ready' || state === 'reconnecting' || state === 'closing') phase = state;
         if (state === 'closed') {
-          run.controller.end(); run.capture?.stop(); current = null;
+          run.controller.end(); run.vision?.stop(); run.capture?.stop(); current = null;
           phase = lastError ? 'error' : 'closed';
         }
         renderStatus();
@@ -195,9 +247,21 @@ async function startSession() {
     });
     if (current !== run) { handle.close(); capture.stop(); return; }
     run.handle = handle;
+    if (capture.videoStream) {
+      run.vision = createMeetingVision({ stream: capture.videoStream, sessionId: handle.sessionId, onState: (state, details = {}) => {
+        if (current !== run) return;
+        run.visionState = state;
+        if (state === 'error') showError(details.message);
+        if (state === 'unavailable') run.vision?.clear();
+        renderStatus();
+      } });
+      run.vision.setEnabled(run.screenContext);
+    }
     run.controller.attach(handle);
     phase = 'ready'; renderStatus();
   } catch (error) {
+    run.handle?.close();
+    run.vision?.stop();
     run.capture?.stop();
     run.controller.end();
     if (current === run) current = null;
@@ -214,7 +278,7 @@ function endSession() {
   ++sequence;
   run.controller.end();
   // End invalidates callbacks before stopping tracks or resolving a chooser.
-  run.abort.abort(); run.capture?.stop();
+  run.abort.abort(); run.vision?.stop(); run.capture?.stop();
   run.handle?.close();
   phase = 'closed'; renderStatus();
 }
@@ -238,16 +302,44 @@ controls.stop.addEventListener('click', () => current?.controller.stop());
 controls.resume.addEventListener('click', () => { clearError(); current?.controller.resume(); });
 controls.summary.addEventListener('click', () => current?.controller.summarize());
 controls.download.addEventListener('click', downloadTranscript);
-controls.source.addEventListener('change', renderStatus);
+controls.output.addEventListener('change', renderStatus);
+controls.devices.addEventListener('click', enableAudioDevices);
+controls.vision.addEventListener('change', () => {
+  try { current?.vision?.setEnabled(controls.vision.checked); }
+  catch (error) { controls.vision.checked = false; showError(error.message); }
+  renderStatus();
+});
+controls.source.addEventListener('change', () => {
+  current?.vision?.stop();
+  controls.vision.checked = false;
+  refreshOutputs(outputs);
+});
 $('dismiss-error').addEventListener('click', clearError);
 window.addEventListener('pagehide', endSession);
 renderStatus();
-fetch('/api/health').then(async response => {
-  if (!response.ok) throw new Error(`Local server health check failed (HTTP ${response.status}).`);
-  health = await response.json();
-  if (health.ok !== true && health.status !== 'ok') throw new Error('Local server is not ready.');
+listAudioOutputs().then(refreshOutputs).catch(() => { /* Permission is requested only by the explicit devices button. */ });
+Promise.all([
+  fetch('/api/health').then(async response => {
+    if (!response.ok) throw new Error(`Local server health check failed (HTTP ${response.status}).`);
+    const data = await response.json();
+    if (data.ok !== true && data.status !== 'ok') throw new Error('Local server is not ready.');
+    return data;
+  }),
+  fetch('/api/capabilities').then(async response => {
+    if (!response.ok) throw new Error(`Tool capabilities could not load (HTTP ${response.status}). Restart the server and refresh.`);
+    const data = await response.json();
+    return validateCapabilities(data.tools);
+  }),
+]).then(([readyHealth, readyCapabilities]) => {
+  health = readyHealth;
+  capabilities = readyCapabilities;
   $('health-dot').classList.toggle('healthy', health.openai_configured === true);
-  $('health-label').textContent = health.openai_configured ? 'Live configured · repository tools available' : 'OpenAI key is not configured';
+  $('health-label').textContent = health.openai_configured ? `Live configured · ${Object.keys(capabilities).length} repository and project tools` : 'OpenAI key is not configured';
   if (!health.openai_configured) showError('Configure OPENAI_API_KEY on the local server, restart it, and refresh this page.');
   renderStatus();
-}).catch(error => { $('health-label').textContent = 'Local server unavailable'; if (!current) showError(error.message); });
+}).catch(error => {
+  capabilities = null;
+  $('health-label').textContent = 'Local server setup incomplete';
+  if (!current) showError(error.message);
+  renderStatus();
+});

@@ -1,6 +1,36 @@
 // Application state for the documented GPT-Live data-channel event contract.
 const TERMINAL = new Set(['response.completed', 'response.done', 'response.failed', 'response.incomplete', 'response.cancelled']);
 const noop = () => {};
+const LEGACY_CAPABILITIES = {
+  list_recent_commits: { label: 'Recent commits', requires_approval: false, destructive: false },
+  list_open_pull_requests: { label: 'Open pull requests', requires_approval: false, destructive: false },
+  list_open_issues: { label: 'Open issues', requires_approval: false, destructive: false },
+  create_issue: { label: 'Create GitHub issue', requires_approval: true, destructive: false },
+};
+
+export function validateCapabilities(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Tool capabilities are unavailable. Refresh after restarting the server.');
+  const capabilities = Object.create(null);
+  for (const [name, capability] of Object.entries(value)) {
+    if (!capability || typeof capability.label !== 'string' || !capability.label.trim()
+        || typeof capability.requires_approval !== 'boolean' || typeof capability.destructive !== 'boolean'
+        || (capability.destructive && !capability.requires_approval)) throw new Error('Invalid tool capabilities. Refresh after restarting the server.');
+    capabilities[name] = Object.freeze({ label: capability.label, requires_approval: capability.requires_approval, destructive: capability.destructive });
+  }
+  return Object.freeze(capabilities);
+}
+
+function freezeArguments(value) {
+  if (value && typeof value === 'object') {
+    Object.values(value).forEach(freezeArguments);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+export function reviewTarget(call) {
+  return call.name.includes('project') ? 'Configured GitHub project' : 'vaishnavJa/Chatty';
+}
 
 export function githubLinks(value) {
   const urls = new Set();
@@ -21,8 +51,9 @@ export function githubLinks(value) {
 }
 
 export class DemoController {
-  constructor({ source = 'microphone', execute, onChange = noop, onError = noop }) {
+  constructor({ source = 'microphone', execute, capabilities = LEGACY_CAPABILITIES, onChange = noop, onError = noop, timers = globalThis, now = Date.now }) {
     this.source = source;
+    this.capabilities = validateCapabilities(capabilities);
     this.execute = execute;
     this.onChange = onChange;
     this.onError = onError;
@@ -43,9 +74,61 @@ export class DemoController {
     this.counter = 0;
     this.abort = new AbortController();
     this.summary = 'idle';
+    this.timers = timers;
+    this.now = now;
+    this.wakeTimer = null;
+    this.quietTimer = null;
+    this.outputActive = false;
+    this.heardAnswer = false;
+    this.needsFinalOutput = false;
+    this.lastToolResultAt = -Infinity;
+    this.lastOutputAt = -Infinity;
+    this.busyDelegations = new Set();
   }
 
   changed() { this.onChange(this); }
+  clearWakeTimers() {
+    this.timers.clearTimeout(this.wakeTimer);
+    this.timers.clearTimeout(this.quietTimer);
+    this.wakeTimer = this.quietTimer = null;
+  }
+  beginWake() {
+    if (this.source !== 'meeting-tab') return;
+    this.clearWakeTimers();
+    this.heardAnswer = false;
+    this.needsFinalOutput = false;
+    this.lastToolResultAt = this.lastOutputAt = -Infinity;
+    this.wakeTimer = this.timers.setTimeout(() => {
+      if (this.active && this.speech === 'listening') this.stop(true);
+    }, 90000);
+    this.wakeTimer?.unref?.();
+  }
+  outputActivity(active) {
+    if (!this.active || this.source !== 'meeting-tab' || this.speech !== 'listening') return;
+    const began = active && !this.outputActive;
+    this.outputActive = active === true;
+    if (this.outputActive) {
+      this.lastOutputAt = this.now();
+      this.heardAnswer = true;
+      // An interim utterance already in progress when a tool completes cannot
+      // count as the final answer; require a fresh audible utterance afterward.
+      if (began && this.lastOutputAt >= this.lastToolResultAt) this.needsFinalOutput = false;
+      this.timers.clearTimeout(this.quietTimer);
+      this.quietTimer = null;
+    } else this.scheduleQuiet();
+  }
+  scheduleQuiet() {
+    if (!this.active || this.source !== 'meeting-tab' || this.speech !== 'listening'
+        || this.outputActive || !this.heardAnswer || this.needsFinalOutput || this.busyDelegations.size
+        || [...this.calls.values()].some(call => ['pending', 'approval', 'running'].includes(call.status))) return;
+    this.timers.clearTimeout(this.quietTimer);
+    this.quietTimer = this.timers.setTimeout(() => {
+      this.quietTimer = null;
+      if (this.active && this.speech === 'listening' && !this.outputActive && !this.needsFinalOutput
+          && !this.busyDelegations.size && ![...this.calls.values()].some(call => ['pending', 'approval', 'running'].includes(call.status))) this.stop(true);
+    }, 1500);
+    this.quietTimer?.unref?.();
+  }
   id(prefix) { return `chatty_${prefix}_${++this.counter}`; }
   send(event) {
     if (!this.active || !this.handle) return false;
@@ -67,15 +150,17 @@ export class DemoController {
     handle.setInputEnabled(true);
     handle.setOutputMuted(this.speech !== 'listening');
     this.instruction(this.source === 'microphone'
-      ? 'Microphone demo mode: respond naturally when the user speaks; a wake word is not required. Keep answers concise. Stop speaking when asked. Do not create issues without the application approval.'
-      : 'Meeting mode: listen silently until someone says Hey Chatty. Then respond briefly. When someone says Chatty stop, stop speaking and wait silently for the next Hey Chatty. Do not perform tools while waiting. Do not create issues without application approval.');
+      ? 'Microphone demo mode: respond naturally when the user speaks; a wake word is not required. Keep answers concise. Stop speaking when asked. Do not apply repository or project changes until the application approves the exact proposed action.'
+      : 'Meeting mode: listen silently until someone addresses you with the word Chatty. Answer that one addressed request briefly, including any requested tool result, then stay silent until addressed with Chatty again. Ordinary conversation is not addressed to you. When someone says Chatty stop, stop immediately. Do not perform tools while waiting. Do not apply repository or project changes until the application approves the exact proposed action.');
     const queued = this.queue.splice(0);
     queued.forEach(event => this.event(event));
     this.changed();
   }
-  stop() {
+  stop(waiting = false) {
     if (!this.active) return;
-    this.speech = 'stopped';
+    this.clearWakeTimers();
+    this.outputActive = false;
+    this.speech = waiting ? 'waiting' : 'stopped';
     if (this.summary === 'requested') this.summary = 'canceled';
     this.handle?.setOutputMuted(true);
     this.commandCursor = this.commandText.length;
@@ -91,17 +176,20 @@ export class DemoController {
       this.canceledResponses.add(group.responseId);
     }
     for (const call of this.calls.values()) {
-      if (call.status === 'approval') this.reject(call.call_id, 'Canceled when Chatty was stopped.');
+      if (call.status === 'approval') this.reject(call.call_id, 'Canceled when Chatty was stopped. No change request was sent.');
+      else if (call.status === 'running' && call.capability?.requires_approval) call.message = 'This change was already approved and may still complete. Check GitHub before requesting it again.';
     }
-    this.instruction('Stop speaking now. Stay silent and do not start new tools until a new Hey Chatty wake phrase or an explicit Resume action. This supersedes earlier speaking requests.');
+    this.busyDelegations.clear();
+    this.instruction(waiting ? 'The addressed request is finished or its wake window expired. Stay silent and do not start tools until someone addresses you with Chatty again. Ordinary conversation is not a new request.' : 'Stop speaking now. Stay silent and do not start new tools until someone addresses you with Chatty again or clicks Resume. This supersedes earlier speaking requests.');
     this.changed();
   }
   resume() {
     if (!this.active || !this.handle) return;
     this.speech = 'listening';
+    this.beginWake();
     this.handle.setInputEnabled(true);
     this.handle.setOutputMuted(false);
-    this.instruction('The user has resumed the conversation. You may respond to the latest request and future speech. Keep answers brief. Do not resume a canceled tool request; ask for a new request when necessary.');
+    this.instruction(this.source === 'meeting-tab' ? 'You have been addressed. Answer this one request, including final tool results, briefly. Then stay silent until someone addresses you with Chatty again. Do not answer unrelated conversation or resume canceled tool requests.' : 'The user has resumed the conversation. You may respond to the latest request and future speech. Keep answers brief. Do not resume a canceled tool request; ask for a new request when necessary.');
     this.changed();
   }
   summarize() {
@@ -113,13 +201,14 @@ export class DemoController {
   }
   end() {
     this.active = false;
+    this.clearWakeTimers();
     this.abort.abort();
     this.queue = [];
     this.handle?.setOutputMuted(true);
     for (const call of this.calls.values()) {
       if (call.status === 'running') {
-        call.status = call.name === 'create_issue' ? 'uncertain' : 'canceled';
-        call.message = call.name === 'create_issue' ? 'Session ended during the request. Check GitHub before retrying; an issue may exist.' : 'Session ended before the result arrived.';
+        call.status = call.capability?.requires_approval ? 'uncertain' : 'canceled';
+        call.message = call.capability?.requires_approval ? 'Session ended during the change request. Check GitHub before retrying; the change may have completed.' : 'Session ended before the result arrived.';
       } else if (call.status === 'approval') {
         call.status = 'rejected';
         call.message = 'Session ended before approval. No request sent.';
@@ -131,7 +220,7 @@ export class DemoController {
     this.commandText += delta;
     const commands = [];
     const patterns = [
-      { kind: 'wake', re: /\b(?:hey|hi|okay|ok)[,\s]+chatty\b/gi },
+      { kind: 'wake', re: /\bchatty\b/gi },
       { kind: 'stop', re: /\b(?:chatty[,\s]+(?:stop|pause|be quiet)|stop[,\s]+chatty)\b/gi },
     ];
     for (const { kind, re } of patterns) {
@@ -140,7 +229,7 @@ export class DemoController {
         if (end > this.commandCursor) commands.push({ kind, end });
       }
     }
-    commands.sort((a, b) => a.end - b.end);
+    commands.sort((a, b) => a.end - b.end || (a.kind === 'stop' ? 1 : -1));
     for (const command of commands) {
       if (command.kind === 'stop') this.stop();
       else if (this.speech !== 'listening') this.resume();
@@ -189,6 +278,7 @@ export class DemoController {
     if (type === 'session.delegation.created' && envelope.target === 'responses') {
       const delegation = envelope.delegation_id ?? 'default';
       this.delegations.set(delegation, envelope.response_id ?? null);
+      if (this.speech === 'listening' && !this.canceledDelegations.has(delegation)) this.busyDelegations.add(delegation);
       if (this.speech !== 'listening') this.canceledDelegations.add(delegation);
       if (this.canceledDelegations.has(delegation) && envelope.response_id) this.canceledResponses.add(envelope.response_id);
       return;
@@ -196,7 +286,10 @@ export class DemoController {
     if (type !== 'response.event' || !envelope.event) return;
     const event = envelope.event;
     const delegation = envelope.delegation_id ?? 'default';
-    if (event.type === 'response.created' && event.response?.id) this.delegations.set(delegation, event.response.id);
+    if (event.type === 'response.created' && event.response?.id) {
+      this.delegations.set(delegation, event.response.id);
+      if (this.speech === 'listening' && !this.canceledDelegations.has(delegation)) this.busyDelegations.add(delegation);
+    }
     const responseId = event.response?.id ?? event.response_id ?? this.delegations.get(delegation) ?? delegation;
     const key = `${delegation}:${responseId}`;
     const blocked = this.speech !== 'listening' || this.canceledDelegations.has(delegation) || this.canceledResponses.has(responseId);
@@ -207,6 +300,7 @@ export class DemoController {
     if (!this.groups.has(key)) this.groups.set(key, { delegation, responseId, calls: new Set(), terminal: false, continued: false, blocked });
     const group = this.groups.get(key);
     group.blocked ||= blocked;
+    if (group.blocked) this.busyDelegations.delete(delegation);
     if (event.type === 'response.output_item.done' && event.item?.type === 'function_call') this.functionCall(event.item, key);
     if (TERMINAL.has(event.type)) {
       group.terminal = true;
@@ -214,19 +308,26 @@ export class DemoController {
         group.blocked = true;
         this.onError(event.response?.error?.message ?? `Backend work ${event.type.slice(9)}.`);
       }
+      if (group.blocked || !group.calls.size) this.busyDelegations.delete(delegation);
       this.continueGroup(key);
+      this.scheduleQuiet();
     }
   }
   functionCall(item, key) {
     if (!item.call_id || this.calls.has(item.call_id)) return;
-    const call = { call_id: item.call_id, name: item.name, key, status: 'pending', sent: false, arguments: {}, links: [] };
+    const call = { call_id: item.call_id, name: item.name, capability: this.capabilities[item.name], key, status: 'pending', sent: false, arguments: {}, links: [] };
     this.calls.set(item.call_id, call);
     this.groups.get(key).calls.add(item.call_id);
+    if (this.source === 'meeting-tab') {
+      this.needsFinalOutput = true;
+      if (this.speech === 'listening' && !this.groups.get(key).blocked) this.busyDelegations.add(this.groups.get(key).delegation);
+    }
     try {
-      call.arguments = typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments;
+      call.arguments = JSON.parse(typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments));
       if (!call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments)) throw new Error('Arguments must be an object.');
       // Approval belongs to the UI; never promote model-supplied values.
       delete call.arguments.approved;
+      freezeArguments(call.arguments);
     } catch {
       this.finish(call, JSON.stringify({ ok: false, error: 'Invalid tool arguments.' }), 'error');
       return;
@@ -234,9 +335,12 @@ export class DemoController {
     if (this.speech !== 'listening' || this.groups.get(key).blocked) {
       this.groups.get(key).blocked = true;
       this.finish(call, JSON.stringify({ ok: false, error: 'Chatty is waiting or stopped. Ask again after Hey Chatty or Resume.' }), 'rejected');
-    } else if (item.name === 'create_issue') {
-      if (typeof call.arguments.title !== 'string' || !call.arguments.title.trim() || typeof call.arguments.body !== 'string') {
-        this.finish(call, JSON.stringify({ ok: false, error: 'A concrete issue title and body are required for review.' }), 'error');
+    } else if (!call.capability) {
+      this.finish(call, JSON.stringify({ ok: false, error: 'Unknown tool capability. Start a new session after refreshing the app.' }), 'error');
+    } else if (call.capability.requires_approval) {
+      if (!Object.keys(call.arguments).length || (item.name === 'create_issue'
+          && (typeof call.arguments.title !== 'string' || !call.arguments.title.trim() || typeof call.arguments.body !== 'string'))) {
+        this.finish(call, JSON.stringify({ ok: false, error: 'Concrete change details are required for review.' }), 'error');
       } else {
         call.status = 'approval';
         this.changed();
@@ -248,7 +352,7 @@ export class DemoController {
     if (!this.active || this.speech !== 'listening' || call?.status !== 'approval' || this.groups.get(call.key)?.blocked) return;
     this.run(call, true);
   }
-  reject(id, message = 'The user rejected this issue. Nothing was created.') {
+  reject(id, message = 'The user rejected this change. No change request was sent.') {
     const call = this.calls.get(id);
     if (!this.active || call?.status !== 'approval') return;
     this.finish(call, JSON.stringify({ ok: false, error: message }), 'rejected');
@@ -263,10 +367,14 @@ export class DemoController {
       this.finish(call, result.output);
     } catch (error) {
       if (!this.active) return;
-      this.finish(call, JSON.stringify({ ok: false, error: call.name === 'create_issue' ? `Result uncertain: ${error.message}. Check GitHub before retrying; the issue may have been created.` : error.message }), call.name === 'create_issue' ? 'uncertain' : 'error');
+      this.finish(call, JSON.stringify({ ok: false, error: call.capability?.requires_approval ? `Result uncertain: ${error.message}. Check GitHub before retrying; the change may have completed.` : error.message }), call.capability?.requires_approval ? 'uncertain' : 'error');
     }
   }
   finish(call, output, status) {
+    if (this.source === 'meeting-tab' && this.speech === 'listening') {
+      this.lastToolResultAt = this.now();
+      this.needsFinalOutput = true;
+    }
     call.output = output;
     let parsed;
     try { parsed = JSON.parse(output); } catch { parsed = { text: output }; }

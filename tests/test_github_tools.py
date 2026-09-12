@@ -56,6 +56,8 @@ def dependency_fixtures():
         "chatty.integrations.github.reads",
         "chatty.integrations.github.writes",
         "chatty.integrations.github.dedup",
+        "chatty.integrations.github.repository_tools",
+        "chatty.integrations.github.project_tools",
     )
     modules = {name: types.ModuleType(name) for name in names}
     for name in names:
@@ -66,6 +68,12 @@ def dependency_fixtures():
     modules[prefix + "transport"].GitHubToolError = FixtureGitHubToolError
     modules[prefix + "transport"].REPOSITORY = "vaishnavJa/Chatty"
     modules[prefix + "dedup"].CallLedger = FixtureLedger
+    for name in ("repository_tools", "project_tools"):
+        module = modules[prefix + name]
+        module.TOOL_SCHEMAS = []
+        module.READ_TOOLS = frozenset()
+        module.WRITE_TOOLS = frozenset()
+        module.TOOL_CAPABILITIES = {}
     return modules
 
 
@@ -135,8 +143,18 @@ class DispatcherTests(unittest.TestCase):
                 )
                 self.assertEqual(ledger.reservations, [])
 
-    def test_exact_four_schemas_with_no_trust_or_repository_arguments(self):
-        schemas = load_tools().TOOL_SCHEMAS
+    def test_legacy_four_schemas_preserve_arguments(self):
+        legacy_names = {
+            "list_recent_commits",
+            "list_open_pull_requests",
+            "list_open_issues",
+            "create_issue",
+        }
+        schemas = [
+            schema
+            for schema in load_tools().TOOL_SCHEMAS
+            if schema["name"] in legacy_names
+        ]
         self.assertEqual(
             {item["name"] for item in schemas},
             {

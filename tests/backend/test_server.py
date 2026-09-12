@@ -198,3 +198,54 @@ def test_tool_exception_is_a_receipt_without_credentials(server_fixture, setting
     assert json.loads(response.json()["output"])["ok"] is False
     assert client.post("/api/tools/execute", json=body).json() == response.json()
     assert len(calls) == 1
+
+
+def test_capabilities_endpoint_exposes_only_public_metadata(server_fixture, settings):
+    _, client, live, calls = server_fixture()
+    response = client.get("/api/capabilities")
+    assert response.status_code == 200
+    result = response.json()
+    assert set(result) == {"tools"}
+    assert set(result["tools"]) == {"create_issue"}
+    capability = result["tools"]["create_issue"]
+    assert set(capability) == {"label", "requires_approval", "destructive"}
+    assert capability["requires_approval"] is True
+    assert capability["destructive"] is False
+    assert settings.api_key not in response.text
+    assert live.requests == calls == []
+
+
+def test_capabilities_unavailable_does_not_look_like_empty_permissions(server_fixture):
+    _, client, _, _ = server_fixture(tools=ToolRegistry([], available=False))
+    response = client.get("/api/capabilities")
+    assert response.status_code == 503
+    assert response.json()["code"] == "tools_unavailable"
+
+
+def test_project_write_http_approval_is_bound_to_exact_change(server_fixture, schemas):
+    calls = []
+    schema = {**schemas[0], "name": "update_project_item"}
+    registry = ToolRegistry([schema], lambda *args: calls.append(args) or {"ok": True})
+    _, client, _, _ = server_fixture(tools=registry)
+    body = make_call(client, name="update_project_item", approved=False)
+    response = client.post("/api/tools/execute", json=body)
+    assert response.status_code == 200
+    assert (
+        json.loads(response.json()["output"])["error"]["code"]
+        == "authorization_required"
+    )
+    assert calls == []
+    changed = {
+        **body,
+        "approved": True,
+        "arguments": {"title": "Different project update"},
+    }
+    assert (
+        client.post("/api/tools/execute", json=changed).json()["code"]
+        == "call_conflict"
+    )
+    body["approved"] = True
+    accepted = client.post("/api/tools/execute", json=body)
+    assert accepted.status_code == 200
+    assert json.loads(accepted.json()["output"])["ok"] is True
+    assert len(calls) == 1

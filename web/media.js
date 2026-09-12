@@ -1,5 +1,26 @@
+/** Enumerate only outputs already exposed by the browser; starts no capture. */
+export async function listAudioOutputs() {
+  const devices = globalThis.navigator?.mediaDevices;
+  if (!devices?.enumerateDevices) throw new Error("Audio device selection is unavailable. Use Chrome on localhost or HTTPS.");
+  return (await devices.enumerateDevices())
+    .filter((device) => device.kind === "audiooutput")
+    .map(({ deviceId, label }) => ({ deviceId, label }));
+}
+
+/** Call from an explicit permission button; releases the temporary mic immediately. */
+export async function requestAudioOutputs() {
+  const devices = globalThis.navigator?.mediaDevices;
+  if (!devices?.getUserMedia) throw new Error("Audio device permission is unavailable. Use Chrome on localhost or HTTPS.");
+  const permission = await devices.getUserMedia({ audio: true, video: false });
+  try {
+    return await listAudioOutputs();
+  } finally {
+    permission.getTracks().forEach((track) => track.stop());
+  }
+}
+
 /** Request capture only from a click/tap handler; browsers require user activation. */
-export async function captureInput(source) {
+export async function captureInput(source, { keepVideo = false } = {}) {
   if (source !== "microphone" && source !== "meeting-tab") {
     throw new TypeError('Audio source must be "microphone" or "meeting-tab".');
   }
@@ -24,6 +45,7 @@ export async function captureInput(source) {
     video: false,
   });
   const tracks = stream.getTracks();
+  let videoStream;
   let stopped = false;
   function stop() {
     if (stopped) return;
@@ -46,14 +68,17 @@ export async function captureInput(source) {
     if (source === "meeting-tab" && surface && surface !== "browser") {
       throw new Error("Select a browser tab for meeting audio, not a window or screen.");
     }
-    for (const track of stream.getVideoTracks()) {
+    const videoTracks = stream.getVideoTracks();
+    if (source === "meeting-tab" && keepVideo) videoStream = new MediaStream(videoTracks);
+    for (const track of videoTracks) {
       stream.removeTrack(track);
-      track.stop();
+      if (videoStream) track.addEventListener("ended", stop);
+      else track.stop();
     }
     for (const track of stream.getAudioTracks()) track.addEventListener("ended", stop);
     stream.addEventListener("inactive", stop);
     globalThis.addEventListener?.("pagehide", stop, { once: true });
-    return { stream, stop };
+    return { stream, videoStream, stop };
   } catch (error) {
     stop();
     throw error;

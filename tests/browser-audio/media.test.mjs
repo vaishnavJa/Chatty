@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captureInput } from "../../web/media.js";
+import { captureInput, listAudioOutputs, requestAudioOutputs } from "../../web/media.js";
 import { browser, replaceGlobals, Stream, Track } from "./fakes.mjs";
 
 function captureFixture(t, tracks) {
@@ -75,4 +75,53 @@ test("invalid source and denied permission do not fall back to another capture s
   t.after(restore);
   await assert.rejects(captureInput("screen"), /Audio source/);
   await assert.rejects(captureInput("meeting-tab"), (error) => error === denial);
+});
+
+test("output enumeration lists only allowed outputs and never starts capture", async (t) => {
+  const restore = replaceGlobals({ navigator: { mediaDevices: {
+    enumerateDevices: async () => [
+      { kind: "audioinput", deviceId: "mic", label: "Microphone" },
+      { kind: "audiooutput", deviceId: "cable", label: "Virtual cable", groupId: "private-group" },
+    ],
+    getUserMedia: () => assert.fail("Enumeration must not request permission"),
+  } } });
+  t.after(restore);
+  assert.deepEqual(await listAudioOutputs(), [{ deviceId: "cable", label: "Virtual cable" }]);
+});
+
+test("explicit output permission releases temporary microphone even if enumeration fails", async (t) => {
+  const microphone = new Track();
+  const restore = replaceGlobals({ navigator: { mediaDevices: {
+    getUserMedia: async (options) => {
+      assert.deepEqual(options, { audio: true, video: false });
+      return new Stream([microphone]);
+    },
+    enumerateDevices: async () => { throw new Error("Enumeration failed."); },
+  } } });
+  t.after(restore);
+  await assert.rejects(requestAudioOutputs(), /Enumeration failed/);
+  assert.equal(microphone.readyState, "ended");
+  assert.equal(microphone.stops, 1);
+});
+
+test("opt-in meeting vision retains video separately from audio and releases both", async (t) => {
+  const audio = new Track();
+  const video = new Track("video", { displaySurface: "browser" });
+  captureFixture(t, [audio, video]);
+  const capture = await captureInput("meeting-tab", { keepVideo: true });
+  assert.deepEqual(capture.stream.getTracks(), [audio]);
+  assert.deepEqual(capture.videoStream.getTracks(), [video]);
+  assert.equal(video.readyState, "live");
+  capture.stop();
+  assert.equal(audio.readyState, "ended");
+  assert.equal(video.readyState, "ended");
+});
+
+test("revoking retained meeting video also ends audio capture", async (t) => {
+  const audio = new Track();
+  const video = new Track("video", { displaySurface: "browser" });
+  captureFixture(t, [audio, video]);
+  await captureInput("meeting-tab", { keepVideo: true });
+  video.end();
+  assert.equal(audio.readyState, "ended");
 });

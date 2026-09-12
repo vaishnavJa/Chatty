@@ -128,7 +128,9 @@ def test_limits_expiry_and_session_scoping(settings, schemas):
         ),
         clock=lambda: now[0],
     )
-    tools = ToolRegistry(schemas, lambda *args: calls.append(args) or {"ok": True})
+    tools = ToolRegistry(
+        schemas, lambda *args, calls=calls: calls.append(args) or {"ok": True}
+    )
     executor.register("s1", tools)
     executor.register("s2", tools)
     with pytest.raises(ExecutorError, match="session limit"):
@@ -161,3 +163,105 @@ def test_missing_module_and_broken_import_are_distinct(monkeypatch):
     monkeypatch.setattr(executor_module.importlib, "import_module", broken)
     with pytest.raises(ModuleNotFoundError):
         ToolRegistry.from_module()
+
+
+def test_registry_uses_all_declared_tools_and_separate_public_capabilities():
+    from chatty.agents.tools import (
+        READ_TOOL_NAMES,
+        TOOL_CAPABILITIES,
+        TOOLS,
+        WRITE_TOOL_NAMES,
+    )
+
+    registry = ToolRegistry.from_module()
+    assert executor_module.ALLOWED_TOOLS == frozenset(TOOLS)
+    assert set(registry.validators) == set(TOOLS)
+    assert READ_TOOL_NAMES | WRITE_TOOL_NAMES == set(TOOLS)
+    assert not READ_TOOL_NAMES & WRITE_TOOL_NAMES
+    assert len(registry.validators) > 4
+    for schema in registry.schemas:
+        assert not {"label", "requires_approval", "destructive"} & schema.keys()
+        name = schema["name"]
+        assert registry.capabilities[name] == {
+            key: TOOL_CAPABILITIES[name][key]
+            for key in ("label", "requires_approval", "destructive")
+        }
+        assert registry.capabilities[name]["requires_approval"] == (
+            name in WRITE_TOOL_NAMES
+        )
+
+
+def test_every_declared_mutation_binds_review_and_deduplicates(settings, schemas):
+    from chatty.agents.tools import WRITE_TOOL_NAMES
+
+    for name in WRITE_TOOL_NAMES:
+        calls = []
+        schema = {**schemas[0], "name": name}
+        executor = ToolExecutor(settings)
+        executor.register(
+            "s",
+            ToolRegistry(
+                [schema], lambda *args, calls=calls: calls.append(args) or {"ok": True}
+            ),
+        )
+        proposal = {"title": "Exact reviewed proposal"}
+        pending = executor.execute("s", "c", name, proposal)
+        assert (
+            json.loads(pending["output"])["error"]["code"] == "authorization_required"
+        )
+        assert not calls
+        with pytest.raises(ExecutorError) as caught:
+            executor.execute(
+                "s", "c", name, {"title": "Changed after review"}, approved=True
+            )
+        assert caught.value.code == "call_conflict"
+        for invalid in (1, "true", None):
+            with pytest.raises(ExecutorError) as caught:
+                executor.execute("s", "c", name, proposal, approved=invalid)
+            assert caught.value.code == "invalid_approval"
+        result = executor.execute("s", "c", name, proposal, approved=True)
+        assert json.loads(result["output"])["ok"] is True
+        assert executor.execute("s", "c", name, proposal, approved=True) == result
+        assert calls == [(name, proposal)]
+
+
+def test_every_declared_mutation_exception_is_uncertain_and_never_retried(
+    settings, schemas
+):
+    from chatty.agents.tools import WRITE_TOOL_NAMES
+
+    for name in WRITE_TOOL_NAMES:
+        calls = []
+
+        def failed(*args, calls=calls):
+            calls.append(args)
+            raise RuntimeError("private detail")
+
+        executor = ToolExecutor(settings)
+        executor.register("s", ToolRegistry([{**schemas[0], "name": name}], failed))
+        first = executor.execute("s", "c", name, {"title": "Bound"}, approved=True)
+        error = json.loads(first["output"])["error"]
+        assert error["uncertain"] is True
+        assert error["retryable"] is False
+        assert "private detail" not in first["output"]
+        assert (
+            executor.execute("s", "c", name, {"title": "Bound"}, approved=True) == first
+        )
+        assert len(calls) == 1
+
+
+def test_unknown_tool_schema_cannot_enable_an_unregistered_operation(schemas):
+    with pytest.raises(ValueError, match="schema"):
+        ToolRegistry(
+            [{**schemas[0], "name": "arbitrary_github_request"}], lambda *_: {}
+        )
+
+
+def test_capability_metadata_mismatch_fails_closed(monkeypatch, schemas):
+    monkeypatch.setitem(
+        executor_module.TOOL_CAPABILITIES,
+        "create_issue",
+        {"label": "Create issue", "requires_approval": False, "destructive": False},
+    )
+    with pytest.raises(ValueError, match="capability"):
+        ToolRegistry(schemas, lambda *_: {})

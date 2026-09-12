@@ -10,10 +10,6 @@
 </p>
 
 <p align="center">
-  Built at an <a href="https://aitinkerers.org/">AI Tinkerers</a> event.
-</p>
-
-<p align="center">
   <a href="https://aitinkerers.org/">
     <img src="landing/dist/assets/ai-tinkerers.png" width="220" alt="AI Tinkerers">
   </a>
@@ -29,18 +25,16 @@ A meeting pauses. Someone asks what changed, which pull requests are open, or wh
 
 Chatty is an AI meeting companion in development, built to bring that project context into the conversation. Ask a question, follow the source, and turn a decision into a next step—without losing the thread.
 
-Created at an **[AI Tinkerers](https://aitinkerers.org/) event**, Chatty explores a simple idea: the tools your team uses should support the conversation while it is happening.
+Chatty explores a simple idea: the tools your team uses should support the conversation while it is happening.
 
 ## From a question to a next step
 
-| In the conversation | What Chatty is being built to bring back |
-| --- | --- |
-| “What changed?” | Recent commits, with authors, timestamps, and links to the source. |
-| “Which pull requests are open?” | Open PRs you can inspect in GitHub. |
-| “What issues are still open?” | A list of open issues and their original records. |
-| “Create an issue for this.” | An issue created from an explicit request, with a link to the result. |
+- “Can you create/close an issue?”
+- “Can you summarize the project?”
+- “How many issues in github repo?”
+- “What issues are still open?”
 
-These are examples of the intended conversation flow. The underlying GitHub tools are implemented; the complete meeting experience is still being connected.
+These are examples of the intended conversation flow, not a list of currently available features. The complete meeting experience is still in development.
 
 ### Catch up. Stay in the flow.
 
@@ -53,18 +47,6 @@ Read the original record when you need the detail. GitHub results include source
 ### A next step. At your request.
 
 Keep the decision to act with the people in the conversation. The tool dispatcher requires explicit authorisation for issue creation, and the durable call ledger prevents blind duplicate writes when calls are redelivered.
-
-## See the direction
-
-The [landing page](landing/README.md) brings the concept to life with the original Chatty mark, warm paper, charcoal, and orange. Its intro plays as a silent looping background, with layouts for desktop and phone screens.
-
-- **[Intro film](landing/dist/assets/chatty-intro.mp4)** — ten seconds from “Your team is talking” to “Meet Chatty.”
-- **[Video source and production notes](https://github.com/vaishnavJa/Chatty/pull/16)** — the Remotion intro and meeting-recording edit.
-- **[Hosted landing page](https://chatty-meeting-companion.takuma2460-0131.chatgpt.site)** — currently an owner-only preview.
-
-The intro illustrates the intended experience; it is not a recording of a working end-to-end meeting integration.
-
-To render the intro or append a meeting recording, follow the [demo-video guide](demo-video/README.md). After installing its dependencies, run `npm run render:intro` from `demo-video/`, or `npm run render:demo -- "/path/to/meeting.mp4"` to include a recording.
 
 ## What works today
 

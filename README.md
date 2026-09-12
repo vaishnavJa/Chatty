@@ -16,7 +16,6 @@
 <p align="center">
   <a href="landing/dist/assets/chatty-intro.mp4">Watch the 10-second intro</a> ·
   <a href="#the-idea">The idea</a> ·
-  <a href="#try-it-locally">Try it locally</a> ·
   <a href="#whats-next">What’s next</a>
 </p>
 
@@ -59,7 +58,7 @@ The [landing page](landing/README.md) brings the concept to life with the origin
 
 - **[Intro film](landing/dist/assets/chatty-intro.mp4)** — ten seconds from “Your team is talking” to “Meet Chatty.”
 - **[Video source and production notes](https://github.com/vaishnavJa/Chatty/pull/16)** — the Remotion intro and meeting-recording edit.
-- **[Hosted landing page](https://chatty-meeting-companion.takuma2460-0131.chatgpt.site)** — currently an owner-only preview; use the local preview below if you do not have access.
+- **[Hosted landing page](https://chatty-meeting-companion.takuma2460-0131.chatgpt.site)** — currently an owner-only preview.
 
 The intro illustrates the intended experience; it is not a recording of a working end-to-end meeting integration.
 
@@ -77,31 +76,6 @@ To render the intro or append a meeting recording, follow the [demo-video guide]
 | Other connections | Slack, Google Drive, Google Chat, Jira, Teams, Confluence, and internet search are placeholders in this checkout. |
 
 See the [GitHub integration guide](src/chatty/integrations/github/README.md) for tool schemas, authorisation requirements, error handling, and backend/UI integration details.
-
-## Try it locally
-
-### Python package
-
-Requires **Python 3.12+** and **uv**.
-
-```sh
-uv sync --locked
-uv run chatty
-```
-
-The command runs a scaffold readiness check and exits. It does not launch a meeting assistant or web server.
-
-Live GitHub tool calls additionally require the `gh` CLI and an authenticated GitHub session. The integration guide describes how to connect the tools; the offline tests below do not need GitHub credentials.
-
-### Landing page
-
-From the repository root:
-
-```sh
-uv run --no-project python -m http.server 4173 --directory landing/dist --bind 127.0.0.1
-```
-
-Open **[localhost:4173](http://localhost:4173)** to explore the page. No API keys or frontend build step are needed.
 
 ## Build with us
 

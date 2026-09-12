@@ -1,73 +1,67 @@
-# Chatty
+<h1 align="center">
+  <a href="https://meetchatty.vercel.app/">
+    <img src="docs/assets/chatty-heading.svg" width="330" alt="Chatty — visit website">
+  </a>
+</h1>
 
-A local meeting assistant using OpenAI GPT-Live and repository tools.
-The Python package and command are named `chatty`.
+<p align="center">
+  <strong>Less searching. More conversation.</strong><br>
+  Your project. In the conversation.
+</p>
 
-## Getting started
+<p align="center">
+  <a href="https://aitinkerers.org/">
+    <img src="landing/dist/assets/ai-tinkerers.png" width="220" alt="AI Tinkerers">
+  </a>
+</p>
 
-```sh
-uv sync --locked
-# Copy .env.example to .env and set OPENAI_API_KEY locally.
-uv run chatty
-```
+[![Meet Chatty — Your AI meeting companion. Keep the conversation moving.](landing/dist/assets/chatty-poster.jpg)](landing/dist/assets/chatty-intro.mp4)
 
-The project uses Python 3.12 or later, uv, and Ruff. Open http://localhost:3000.
-The server binds only to the demo laptop and serves the UI owner's `web/` files.
-Before those files land, it displays a backend-ready page. Live sessions require
-an API key with GPT-Live access and an available `OPENAI_BACKEND_MODEL`.
+## The idea
 
-See [the backend handoff](docs/backend-handoff.md) for the exact session/tool
-contracts, teammate integration instructions, local trust model, and audio test checklist.
+**Your team is talking. The answers are somewhere else.**
 
-## Development checks
+A meeting pauses. Someone asks what changed, which pull requests are open, or what needs to happen next. The context is in GitHub; the conversation is happening somewhere else.
 
-```sh
-uv run pytest tests/backend
-uv run ruff check .
-uv run ruff format --check .
-```
+Chatty is an AI meeting companion in development, built to bring that project context into the conversation. Ask a question, follow the source, and turn a decision into a next step—without losing the thread.
 
-Run `uv run ruff format .` to apply formatting.
+Chatty explores a simple idea: the tools your team uses should support the conversation while it is happening.
 
-## Project structure
+## From a question to a next step
 
-```text
-src/chatty/
-├── __main__.py          # Local server entry point
-├── config.py            # Server-only environment configuration
-├── server.py            # Local UI, session, and tool-execution endpoints
-├── conversations/      # Conversations, messages, and sessions
-├── agents/             # Agent execution and tool calls
-└── integrations/       # Service-specific integrations
-    ├── gpt_live/
-    ├── slack/
-    ├── google_drive/
-    ├── google_chat/
-    ├── jira/
-    ├── teams/
-    ├── confluence/
-    └── internet_search/
-```
+| In the conversation | What Chatty is being built to bring back |
+| --- | --- |
+| Can you create/close an issue? | Create or close a GitHub issue at your request. |
+| Can you summarize the project? | A concise overview of the project and its recent activity. |
+| How many issues in github repo? | The number of issues in the GitHub repository. |
+| What issues are still open? | A list of open issues with links to their original records. |
 
-The GPT-Live integration creates voice sessions with managed Responses delegation.
-The GitHub owner supplies `chatty.agents.tools.TOOL_SCHEMAS` and `execute_tool`.
-The backend registers sessions, validates tool calls, and deduplicates execution.
-Other service packages remain placeholders.
+These are examples of the intended conversation flow, not a list of currently available features. The complete meeting experience is still in development.
 
-The Teams, Confluence, and Internet Search packages are also placeholders.
-Service connections and internet searches cannot be performed yet.
-The Internet Search provider and API will be selected during implementation.
-The agent is intended to access search result titles, URLs, and summaries.
+### Catch up. Stay in the flow.
 
-Environment variables load from the repository's `.env`, which is excluded from Git.
-Existing environment variables take precedence. Never place credentials in `web/`.
+Bring commits, pull requests, and issues into the same context as your team’s questions.
 
-## Next implementation steps
+### Find the answer. Follow the source.
 
-The four demo issues split ownership across the Live backend, meeting audio,
-GitHub tools, and UI. Integrate their documented interfaces, then verify a real
-meeting conversation and one explicitly requested issue creation. Jira and other
-services are future work. All supported GitHub mutations use a saved proposal
-and [spoken approval](docs/voice-approval.md); no browser approval click is needed.
-This demo trusts the local browser and meeting participants. It does not identify
-or authenticate individual speakers.
+Read the original record when you need the detail. GitHub results include source links, authors, and timestamps.
+
+### A next step. At your request.
+
+Keep the decision to act with the people in the conversation. Chatty prepares the requested repository or project change, reads its proposal aloud, and asks for spoken approval. Say yes or Chatty confirm to approve, or no, Chatty cancel, or Chatty stop to cancel. No browser approval click is needed. The durable call ledger prevents blind duplicate writes when calls are redelivered.
+
+## What works today
+
+| Area | Status in this checkout |
+| --- | --- |
+| GitHub reads | Repository, commits, issues, comments, pull requests, branches, files, and workflow context, with source links. |
+| GitHub and project changes | 17 supported mutations with saved proposals, spoken approval, validated inputs, and durable call deduplication. |
+| Repository scope | GitHub tools target `vaishnavJa/Chatty` and one optional server-configured project; GitHub permissions still apply. |
+| Landing page | Static site with the intro video, responsive layout, and reduced-motion support. |
+| Meeting companion | Local OpenAI Live backend and meeting UI; virtual-microphone replies without outgoing screen presentation, Chatty wake/stop, and optional requested screen snapshots. |
+
+The prototype trusts its local browser and meeting participants; it does not authenticate individual speakers. Speech timing and the final voice-approval flow still require a live rehearsal. Setup and limits are in the [local demo guide](docs/local-demo.md), [meeting setup](docs/meeting-setup.md), and [spoken approval contract](docs/voice-approval.md).
+
+---
+
+<p align="center"><strong>Keep the conversation moving.</strong></p>

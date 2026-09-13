@@ -1,4 +1,11 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  copyFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -8,13 +15,38 @@ const script = JSON.parse(
   readFileSync(resolve(root, "src/ad-script.json"), "utf8"),
 );
 const localVoice = process.argv.includes("--local-voice");
+const takesDirIndex = process.argv.indexOf("--takes-dir");
+if (
+  takesDirIndex >= 0 &&
+  (!process.argv[takesDirIndex + 1] ||
+    process.argv[takesDirIndex + 1].startsWith("--"))
+)
+  throw new Error(
+    "--takes-dir requires a directory containing manifest.json and eight WAV takes.",
+  );
+if (takesDirIndex >= 0 && localVoice)
+  throw new Error(
+    "Choose either imported voice takes or --local-voice, not both.",
+  );
+const takesDir =
+  takesDirIndex >= 0 ? resolve(process.argv[takesDirIndex + 1]) : null;
+const imported = takesDir
+  ? JSON.parse(readFileSync(resolve(takesDir, "manifest.json"), "utf8"))
+  : null;
+if (
+  takesDir &&
+  (!imported || typeof imported !== "object" || Array.isArray(imported))
+)
+  throw new Error("Voice manifest must be a JSON object.");
 const scratch = resolve(
   root,
-  localVoice ? "out/ad-audio-local" : "out/ad-audio",
+  imported
+    ? "out/ad-audio-imported"
+    : localVoice
+      ? "out/ad-audio-local"
+      : "out/ad-audio",
 );
 const destination = resolve(root, "public/audio/ad");
-mkdirSync(scratch, { recursive: true });
-mkdirSync(destination, { recursive: true });
 
 // Only the key is read from the local ignored environment file. It is never
 // printed, passed in process arguments, or included in generated artifacts.
@@ -46,10 +78,84 @@ function command(program, args) {
   return result.stdout;
 }
 
+// Imported synthesis is an explicit, offline input. Verify every take before
+// writing outputs so stale cached text, missing files or time compression
+// cannot silently replace the approved narration.
+const importedTakes = [];
+if (imported) {
+  for (const field of ["model", "voice", "license", "source"]) {
+    if (typeof imported[field] !== "string" || !imported[field].trim())
+      throw new Error(`Voice manifest requires a non-empty ${field}.`);
+  }
+  if (!Array.isArray(imported.takes) || imported.takes.length !== script.length)
+    throw new Error("Voice manifest must describe exactly eight takes.");
+  for (const part of script) {
+    const matches = imported.takes.filter((take) => take.id === part.id);
+    if (matches.length !== 1)
+      throw new Error(
+        `Voice manifest must contain scene ${part.id} exactly once.`,
+      );
+    const take = matches[0];
+    if (take.file !== `narration-${part.id}.wav` || take.text !== part.text)
+      throw new Error(
+        `Imported scene ${part.id} filename or spoken text does not match the approved script.`,
+      );
+    const file = resolve(takesDir, take.file);
+    const metadata = JSON.parse(
+      command("ffprobe", [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=format_name,duration:stream=codec_type",
+        "-of",
+        "json",
+        file,
+      ]),
+    );
+    const seconds = Number(metadata.format.duration);
+    if (
+      metadata.format.format_name !== "wav" ||
+      metadata.streams.length !== 1 ||
+      metadata.streams[0].codec_type !== "audio" ||
+      !Number.isFinite(seconds) ||
+      seconds <= 0
+    )
+      throw new Error(
+        `Imported scene ${part.id} must be one valid WAV audio take.`,
+      );
+    if (seconds > part.duration - 0.65)
+      throw new Error(
+        `Imported scene ${part.id} is ${seconds.toFixed(3)}s; synthesize it within ${(part.duration - 0.65).toFixed(2)}s. Imported narration is never sped up or cut.`,
+      );
+    const sha256 = createHash("sha256")
+      .update(readFileSync(file))
+      .digest("hex");
+    if (take.sha256 && take.sha256 !== sha256)
+      throw new Error(
+        `Imported scene ${part.id} does not match its manifest hash.`,
+      );
+    importedTakes.push({
+      id: part.id,
+      file: take.file,
+      text: part.text,
+      durationSeconds: seconds,
+      sha256,
+      synthesisSpeed:
+        typeof take.speed === "number" && Number.isFinite(take.speed)
+          ? take.speed
+          : null,
+    });
+  }
+}
+mkdirSync(scratch, { recursive: true });
+mkdirSync(destination, { recursive: true });
+
 const timings = [];
 for (const part of script) {
   const raw = resolve(scratch, `narration-${part.id}.wav`);
-  if (!existsSync(raw) && localVoice) {
+  if (imported) {
+    copyFileSync(resolve(takesDir, `narration-${part.id}.wav`), raw);
+  } else if (!existsSync(raw) && localVoice) {
     const aiff = resolve(scratch, `narration-${part.id}.aiff`);
     command("say", ["-v", "Samantha", "-r", "180", "-o", aiff, part.text]);
     command("ffmpeg", [
@@ -99,7 +205,7 @@ for (const part of script) {
     ]).trim(),
   );
   const available = part.duration - 0.65;
-  const tempo = Math.max(1, seconds / available);
+  const tempo = imported ? 1 : Math.max(1, seconds / available);
   if (tempo > 1.22)
     throw new Error(
       `Narration ${part.id} is too long for its scene (${seconds.toFixed(2)}s). Shorten the script or regenerate it; don't rush the voice.`,
@@ -115,7 +221,9 @@ for (const part of script) {
     "-i",
     raw,
     "-af",
-    `atempo=${tempo},loudnorm=I=-17:TP=-2:LRA=7`,
+    imported
+      ? "loudnorm=I=-17:TP=-2:LRA=7"
+      : `atempo=${tempo},loudnorm=I=-17:TP=-2:LRA=7`,
     "-ar",
     "48000",
     "-ac",
@@ -307,6 +415,68 @@ writeFileSync(
   resolve(root, "src/ad-timings.json"),
   JSON.stringify(timings, null, 2) + "\n",
 );
+if (imported) {
+  writeFileSync(
+    resolve(root, "src/ad-voice.json"),
+    JSON.stringify(
+      {
+        model: imported.model,
+        voice: imported.voice,
+        license: imported.license,
+        source: imported.source,
+        method: "Imported neural narration; no post-synthesis tempo changes",
+        model_sha256: imported.model_sha256 || null,
+        voices_sha256: imported.voices_sha256 || null,
+        implementation:
+          typeof imported.implementation === "string"
+            ? imported.implementation
+            : null,
+        implementationLicense:
+          typeof imported.implementationLicense === "string"
+            ? imported.implementationLicense
+            : null,
+        implementationSource:
+          typeof imported.implementationSource === "string" &&
+          imported.implementationSource.startsWith("https://")
+            ? imported.implementationSource
+            : null,
+        voiceSource:
+          typeof imported.voiceSource === "string" &&
+          imported.voiceSource.startsWith("https://")
+            ? imported.voiceSource
+            : null,
+        synthesis: {
+          postTempo: 1,
+          speeds: [
+            ...new Set(importedTakes.map((take) => take.synthesisSpeed)),
+          ],
+        },
+        takes: importedTakes,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+} else {
+  // A later legacy render must not retain an earlier neural import's identity.
+  writeFileSync(
+    resolve(root, "src/ad-voice.json"),
+    JSON.stringify(
+      {
+        model: localVoice
+          ? "macOS built-in speech synthesis"
+          : "gpt-4o-mini-tts",
+        voice: localVoice ? "Samantha" : "marin",
+        method: localVoice
+          ? "Local operating-system synthesis"
+          : "OpenAI speech endpoint",
+        takes: timings.map(({ id, tempo }) => ({ id, postTempo: tempo })),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
 
 const stamp = (sec) => {
   const ms = Math.round(sec * 1000);
@@ -324,6 +494,6 @@ writeFileSync(
 writeFileSync(
   resolve(root, "out/chatty-ad-script.txt"),
   script.map((part) => `${stamp(part.start)}\n${part.text}`).join("\n\n") +
-    `\n\n${localVoice ? "Narration synthesized locally with macOS (Samantha)." : "AI-generated narration by OpenAI (marin)."} Original synthesized instrumental music. Product scenes are illustrative, with fictional people and an example ticketing workflow; they are not a live recording.\n`,
+    `\n\n${imported ? `Narration generated with ${imported.model} (${imported.voice}); imported neural voice takes without post-synthesis tempo changes.` : localVoice ? "Narration synthesized locally with macOS (Samantha)." : "AI-generated narration by OpenAI (marin)."} Original synthesized instrumental music. Product scenes are illustrative, with fictional people and an example ticketing workflow; they are not a live recording.\n`,
 );
 console.log("Created 60-second mix, captions and narration script.");

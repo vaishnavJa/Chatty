@@ -249,6 +249,23 @@ class ChattyApp:
         # paid analysis. Replays receive the first receipt, never another image call.
         return self.executor.execute_vision(session_id, call_id, question, describe)
 
+    def meeting_context(self, body: dict, *, end=False) -> dict:
+        required = {"session_id"} if end else {"session_id", "events", "batch_sequence"}
+        optional = set() if end else {"dropped_before"}
+        if not required <= body.keys() or set(body) - required - optional:
+            raise ExecutorError(
+                400, "invalid_request", "Unexpected or missing meeting context fields."
+            )
+        session_id = required_string(body, "session_id", MAX_IDENTIFIER_LENGTH)
+        if end:
+            return self.executor.end_meeting_context(session_id)
+        return self.executor.append_meeting_context(
+            session_id,
+            body["events"],
+            body["batch_sequence"],
+            body.get("dropped_before", 0),
+        )
+
     def capabilities(self) -> dict:
         try:
             tools = self.tool_factory()
@@ -293,6 +310,11 @@ class LocalServer(ThreadingHTTPServer):
         super().server_close()
         self.app.live.close()
         self.app.vision.close()
+
+    def service_actions(self) -> None:
+        # serve_forever calls this even while no requests arrive. Expired
+        # transcripts are released without background model or network work.
+        self.app.executor.prune()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -413,6 +435,8 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/live/session",
                 "/api/tools/execute",
                 "/api/vision/analyze",
+                "/api/meeting/context",
+                "/api/meeting/context/end",
                 "/api/approvals/prepare",
                 "/api/approvals/arm",
                 "/api/approvals/voice",
@@ -429,6 +453,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_reply(201, self.server.app.create_session(body))
             elif self.path == "/api/vision/analyze":
                 self.json_reply(200, self.server.app.analyze_vision(body))
+            elif self.path in {"/api/meeting/context", "/api/meeting/context/end"}:
+                self.json_reply(
+                    200,
+                    self.server.app.meeting_context(
+                        body, end=self.path.endswith("/end")
+                    ),
+                )
             elif self.path.startswith("/api/approvals/"):
                 self.json_reply(
                     200,

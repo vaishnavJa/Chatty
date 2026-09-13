@@ -14,9 +14,10 @@ approval. Keep the app open for its audio connection; no approval click is neede
    issue?”** It does not read the full title, body or field list.
 3. Reply naturally: **“Yes, go ahead,” “That sounds good,”** or an equivalent clear
    instruction to carry out the proposal. **No** or **cancel** declines it.
-4. If your reply is unclear, Chatty asks a brief clarification and keeps the same
-   saved action pending. If you ask to change the action, it prepares a revised
-   proposal and obtains fresh approval.
+4. Ask **“What would you put in the description?”** or **“Which issue?”** to inspect
+   the actual saved draft. Chatty answers briefly and keeps the same action pending.
+   If your reply is unclear, it asks a clarification. If you ask to change the
+   action, it prepares a revised proposal and obtains fresh approval.
 5. Chatty reports success only after the actual tool receipt confirms it. The app
    shows the saved payload and returned link or error for optional inspection.
 
@@ -83,6 +84,24 @@ to the revised action.
 `expires_at`, without a tool receipt. Keep the same immutable action, speak the
 clarification, re-arm and collect a fresh answer. Do not report the function as
 completed or cancel it merely because the first reply was unclear.
+
+`question` is also nonterminal. It returns `answer`, `details`, a new `prompt` and
+renewed `expires_at`. Answers come from the saved proposal's actual fields, not a
+newly invented draft. Spoken answers are bounded to 1,200 characters and identify
+excerpts when needed; the requested fields remain available in the draft panel.
+Unknown remote facts are not inferred from the pending payload. The browser speaks
+the answer and a brief consent question, re-arms with fresh playback evidence and
+collects fresh consent. A question never approves the action, even if its wording
+contains an affirmative word, and does not submit a final function receipt.
+
+If a completed natural consent question cannot pass the semantic readiness check,
+`arm` returns retryable `prompt_retry_required` with the saved short canonical
+`prompt` and `expires_at`. The browser replays that prompt at most twice (three
+readiness attempts total), discarding old prompt and answer evidence each time.
+The canonical path does not need another language-classifier request. Repeated
+failure ends the unapplied approval and preserves its exact draft in the card so
+the participant can request a new proposal. Incomplete playback still needs more
+evidence; a readiness error never authorizes a write. Stop suppresses late retries.
 
 If the participant continues speaking during interpretation, `interrupt` invalidates
 that classification generation without canceling the proposal. The old voice

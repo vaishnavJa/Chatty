@@ -48,7 +48,7 @@ Read the original record when you need the detail. GitHub results include source
 
 ### A next step. At your request.
 
-Keep the decision to act with the people in the conversation. Chatty prepares the requested repository or project change and asks a short, natural confirmation question. Reply in your own words; if the answer is unclear, it asks a brief clarification while keeping the action pending. No browser approval click or full draft readback is needed. The durable call ledger prevents blind duplicate writes when calls are redelivered.
+Keep the decision to act with the people in the conversation. Chatty prepares the requested repository or project change and asks a short, natural confirmation question. Ask about the saved draft, request a revision, or approve in your own words. Unclear replies leave the action pending for clarification; revised actions need fresh approval. No browser approval click or full draft readback is needed. The durable call ledger prevents blind duplicate writes when calls are redelivered.
 
 ## What works today
 
@@ -57,10 +57,15 @@ Keep the decision to act with the people in the conversation. Chatty prepares th
 | GitHub reads | Repository, commits, issues, comments, pull requests, branches, files, and workflow context, with source links. |
 | GitHub and project changes | 17 supported mutations with saved proposals, spoken approval, validated inputs, and durable call deduplication. |
 | Repository scope | GitHub tools target `vaishnavJa/Chatty` and one optional server-configured project; GitHub permissions still apply. |
+| Meeting discussion | Retrieve bounded transcript evidence from the current session, including speech heard while quiet; use explicit corrections without claiming speaker identity or guaranteed consensus. |
 | Landing page | Static site with the intro video, responsive layout, and reduced-motion support. |
 | Meeting companion | Say Chatty once, then ask follow-ups naturally until Chatty stop. Local Live backend, virtual-microphone replies, a brief Okay on Stop, and optional requested screen snapshots without outgoing presentation. |
 
 The prototype trusts its local browser and meeting participants; it does not authenticate individual speakers. The updated dialogue and voice-approval flow still require a live rehearsal, even after isolated tests pass. Changes load in a fresh server and Live session; an existing call keeps its current configuration. Setup and limits are in the [local demo guide](docs/local-demo.md), [meeting setup](docs/meeting-setup.md), and [spoken approval contract](docs/voice-approval.md).
+
+The [short live-demo sequence](docs/judging-demo.md) shows a corrected meeting
+decision becoming one reviewed, approved issue, with a checklist for recording
+actual end-to-end evidence.
 
 ---
 

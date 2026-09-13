@@ -32,6 +32,12 @@ equivalent reply in your own words. Say **No**, **cancel**, or **Chatty, stop** 
 cancel. No approval button is required. The full saved
 payload and resulting receipt remain visible in the app.
 
+You can inspect the draft before deciding: **“What would you put in the
+description?”** gets a brief answer from the saved payload and leaves the action
+pending. A request such as **“Change the title to Include owners in meeting
+summaries”** requires a revised proposal and a fresh approval. Long fields are
+summarized as explicit excerpts in speech and remain available in the app.
+
 This applies to all supported repository and project mutations. The server's
 `/api/approvals/prepare`, `arm`, `voice` and `cancel` routes bind confirmation to a
 specific session, call ID and saved payload. The old `approved: true` flag on

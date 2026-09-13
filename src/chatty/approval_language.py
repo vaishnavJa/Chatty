@@ -1,5 +1,6 @@
 """Brief proposals and bounded, tool-free interpretation of approval speech."""
 
+import copy
 import json
 import re
 
@@ -10,7 +11,8 @@ QUESTION = re.compile(
     r"\b(?:do you approve|(?:should|shall|can|may) i (?:go ahead|proceed|do|make|create|open|update|apply|delete|merge)|"
     r"(?:is|would) that (?:be )?(?:okay|ok|alright|all right)|does that (?:sound|look) (?:good|okay|ok)|"
     r"(?:would you like|do you want) me to (?:go ahead|proceed|do|make|create|open|update|apply|delete|merge)|"
-    r"do i have your (?:approval|permission))\b",
+    r"do i have your (?:approval|permission)|(?:sound|look)s? (?:good|okay|ok)|"
+    r"(?:okay|ok|alright|all right) with you|(?:should|shall|may) i)\b",
     re.I,
 )
 
@@ -65,27 +67,53 @@ def confirmation_prompt(name, arguments, repository=None):
     return f"I'll {proposal_action(name, arguments)}. Do you approve?"
 
 
+def _reply_text(text):
+    return re.sub(r"^(?:hey )?chatty\s+|\s+chatty$", "", normalize(text)).strip()
+
+
+def _draft_question(text):
+    """Recognize information requests, never treat a question as consent."""
+    if re.match(r"^(?:how about|what about|why not|why dont)\b", text):
+        return False  # Rhetorical suggestions need contextual classification.
+    return bool(
+        re.match(
+            r"^(?:(?:yes|yeah|okay|ok|sure|actually|but|first)\s+)*"
+            r"(?:(?:what|whats|who|whos|where|which|why|how|when)\b|"
+            r"(?:can|could|would|will) you (?:please )?(?:read|show|explain|tell|describe|summarize|repeat)\b|"
+            r"(?:please )?(?:read|show|explain|tell|describe|summarize|repeat)\b)",
+            text,
+        )
+    )
+
+
 def direct_intent(text):
     """Fast paths only for whole, unconditional responses; order is deliberate."""
-    if "?" in text:
-        return None  # "Approved?" may ask about status rather than grant consent.
-    text = normalize(text)
-    text = re.sub(r"^(?:hey )?chatty\s+|\s+chatty$", "", text).strip()
+    question_mark = "?" in text
+    text = _reply_text(text)
     if re.fullmatch(
         r"(?:no\s+)*(?:no|nope|nah|cancel(?: it| this| that| the change)?|stop|pause|be quiet|reject(?: it| that)?|never mind|nevermind|dont(?: do it| approve| proceed)|do not(?: do it| approve| proceed))(?:\s+(?:please|thanks|thank you))?",
         text,
     ):
         return "reject"
     if re.search(
-        r"\b(?:change|rename|replace|instead|except|but not|add|remove|different)\b",
+        r"\b(?:change|rename|replace|instead|except|but not|add|remove|different|assign|unassign|set|use|make)\b",
         text,
     ):
         # Distinguish an actual correction from discussion about corrections.
         if re.match(
-            r"^(?:(?:yes|yeah|okay|ok|sure|no|actually)\s+)*(?:but\s+)?(?:please\s+)?(?:change|rename|replace|add|remove|make|use|set)\b",
+            r"^(?:(?:yes|yeah|okay|ok|sure|no|actually)\s+)*(?:but\s+)?"
+            r"(?:(?:can|could|would|will) you\s+)?(?:please\s+)?"
+            r"(?:change|rename|replace|add|remove|make|use|set|assign|unassign)\b",
             text,
-        ) or re.search(r"\b(?:instead|but not that)\b", text):
+        ) or (
+            not _draft_question(text)
+            and re.search(r"\b(?:instead|but not that)\b", text)
+        ):
             return "revise"
+    if _draft_question(text):
+        return "question"
+    if question_mark:
+        return None  # "Approved?" may ask about status rather than grant consent.
     affirmative = r"(?:yes|yeah|yep|yup|sure|okay|ok|absolutely|certainly|definitely|approved?|confirm(?:ed)?|agreed|sounds good|looks good|go ahead|do it|please do it|i approve|i agree|that works|thats fine|all right|alright|perfect|of course)"
     if re.fullmatch(
         rf"{affirmative}(?:\s+{affirmative})*(?:\s+(?:please|thanks|thank you))?", text
@@ -98,6 +126,107 @@ def direct_intent(text):
     ):
         return "unclear"
     return None
+
+
+_DETAIL_FIELDS = {
+    "title": r"\b(?:title|name)\b",
+    "body": r"\b(?:body|description|write|writing|written|say|wording|comment|text)\b",
+    "assignees": r"\b(?:assignee|assignees|assigned|owner|responsible)\b",
+    "labels": r"\b(?:label|labels|tag|tags)\b",
+    "milestone": r"\bmilestone\b",
+    "state": r"\b(?:state|status|closed|open|reopen)\b",
+    "branch": r"\bbranch\b",
+    "base": r"\b(?:base|target branch)\b",
+    "head": r"\b(?:head|source branch)\b",
+    "path": r"\b(?:path|file|filename)\b",
+    "content": r"\b(?:content|code|file contents)\b",
+    "message": r"\b(?:commit message)\b",
+    "field_name": r"\bfield\b",
+    "value": r"\bvalue\b",
+    "readme": r"\breadme\b",
+    "run_id": r"\b(?:workflow|run)\b",
+    "merge_method": r"\b(?:merge method|squash|rebase)\b",
+}
+_FIELD_LABELS = {
+    "body": "Description",
+    "assignees": "Assignees",
+    "expected_sha": "Required file version",
+    "expected_head_sha": "Required pull request version",
+    "sha": "Commit",
+    "url": "Item URL",
+}
+
+
+def proposal_answer(name, arguments, question):
+    """Answer from the immutable draft only; no invented facts or model prose.
+
+    Full requested fields are returned for local display. Spoken excerpts are
+    bounded so a large file cannot consume the entire confirmation lifetime.
+    Missing update fields mean unchanged by this proposal, not known remote state.
+    """
+    text = _reply_text(question)
+    full = bool(
+        re.search(
+            r"\b(?:(?:full|whole|entire|complete|exact) (?:draft|issue|proposal|change)|"
+            r"all (?:the )?(?:details|fields)|everything)\b",
+            text,
+        )
+    )
+    fields = [
+        field for field, pattern in _DETAIL_FIELDS.items() if re.search(pattern, text)
+    ]
+    if name == "update_project_details" and "body" in fields:
+        fields[fields.index("body")] = "description"
+    if name == "update_repository_file" and "body" in fields:
+        fields[fields.index("body")] = "content"
+    if name == "update_project_item" and "state" in fields:
+        fields[fields.index("state")] = "value"
+    if full:
+        fields = list(arguments)
+    elif re.search(r"\bwhat (?:will|would|are) you (?:write|writing)\b", text):
+        fields = [key for key in ("title", "body", "content") if key in arguments]
+    elif not fields and re.search(
+        r"\b(?:what (?:will|would) (?:you|it) (?:do|change)|"
+        r"what(?:s| is) (?:the )?(?:draft|proposal|change)|"
+        r"(?:describe|summarize|read|show) (?:me )?(?:the )?(?:draft|proposal|change))\b",
+        text,
+    ):
+        fields = [key for key in ("title", "body", "assignees") if key in arguments]
+    fields = list(dict.fromkeys(fields))
+    details = {key: copy.deepcopy(arguments[key]) for key in fields if key in arguments}
+    lines = []
+    for key in fields:
+        label = _FIELD_LABELS.get(key, key.replace("_", " ").capitalize())
+        if key not in arguments:
+            if key == "assignees":
+                lines.append("This draft does not include an assignment change.")
+            else:
+                lines.append(f"{label} is not included in this proposed change.")
+            continue
+        value = arguments[key]
+        if value is None or value == [] or value == "":
+            rendered = "empty; this field will be cleared"
+        elif isinstance(value, str):
+            rendered = value
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            rendered = ", ".join(value)
+        elif isinstance(value, bool):
+            rendered = "yes" if value else "no"
+        else:
+            rendered = json.dumps(value, ensure_ascii=False)
+        lines.append(f"{label}: {rendered}")
+    if not lines:
+        lines = [
+            f"The saved action is to {proposal_action(name, arguments)}. "
+            "I can read its saved fields, but this draft doesn't establish the answer to that question."
+        ]
+    answer = "\n".join(lines)
+    if len(answer) > 1200:
+        answer = (
+            answer[:1100].rsplit(" ", 1)[0]
+            + "… That's an excerpt; the complete requested fields are in the saved draft."
+        )
+    return {"answer": answer, "details": details}
 
 
 class ApprovalLanguage:
@@ -115,10 +244,16 @@ For reply mode: approve means this participant clearly consents to this exact
 pending action, including natural colloquial or repeated agreement. reject means
 they decline, cancel, or tell Chatty to stop. revise means they actually request a
 change to the action, destination, or content; even 'yes, but change ...' is revise.
-unclear covers questions, conditions, hypothetical/quoted/third-party consent,
+question means they ask for information about the pending action, its draft fields,
+or what it would do, without requesting an amendment. 'What will you write?' and
+'Who is assigned?' are questions. 'Can you assign it to Karim?' requests a revision.
+unclear covers uncertainty about consent, conditions, hypothetical/quoted/third-party consent,
 mixed speakers, uncertainty, or anything that does not establish a clear decision.
 Never infer approval from the proposal text or earlier speech. Negation and actual
 amendments take precedence over an affirmative word. Interpret meaning in context.
+The target contains proposed values, not a snapshot of current GitHub state.
+Agreement naming a different assignee, label, or milestone is a revision, not
+approval of the saved values. Omitted fields do not establish their current value.
 For prompt mode: ready requires an audible description matching the pending action
 and its short topic/target, followed by a consent question. A natural paraphrase is
 fine; full title/body/field readback is not needed. A question without a description,
@@ -150,6 +285,27 @@ Return only the required enum. If uncertain, use unclear or not_ready."""
                 "archived",
             }
         }
+        target = context["pending_action"]["target"]
+        for key, maximum, width in (("assignees", 10, 39), ("labels", 50, 100)):
+            if key in arguments:
+                values = arguments[key]
+                if (
+                    not isinstance(values, list)
+                    or len(values) > maximum
+                    or any(
+                        not isinstance(value, str) or not 1 <= len(value) <= width
+                        for value in values
+                    )
+                ):
+                    return fallback
+                target[key] = list(values)
+        if "milestone" in arguments:
+            milestone = arguments["milestone"]
+            if milestone is not None and (
+                type(milestone) is not int or not 1 <= milestone <= 9007199254740991
+            ):
+                return fallback
+            target["milestone"] = milestone
         try:
             post = self.http.post if self.http is not None else httpx.post
             response = post(
@@ -226,7 +382,7 @@ Return only the required enum. If uncertain, use unclear or not_ready."""
                 name,
                 arguments,
                 text,
-                ["approve", "reject", "revise", "unclear"],
+                ["approve", "reject", "revise", "question", "unclear"],
                 "unclear",
             )
         )

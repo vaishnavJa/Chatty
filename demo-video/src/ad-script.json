@@ -1,0 +1,50 @@
+[
+  {
+    "id": "01",
+    "start": 0,
+    "duration": 6,
+    "text": "Your team is talking. A bug needs fixing. But the answers are somewhere else."
+  },
+  {
+    "id": "02",
+    "start": 6,
+    "duration": 7,
+    "text": "Meet Chatty, the AI teammate that brings your project into the meeting. Just say her name."
+  },
+  {
+    "id": "03",
+    "start": 13,
+    "duration": 8,
+    "text": "Ask what changed. Chatty checks your GitHub repository and brings the relevant context, with sources, into the conversation."
+  },
+  {
+    "id": "04",
+    "start": 21,
+    "duration": 8,
+    "text": "Keep talking. Ask a follow-up. Turn the discussion into an issue, and shape the draft together."
+  },
+  {
+    "id": "05",
+    "start": 29,
+    "duration": 9,
+    "text": "Refine the draft. Check the details. Chatty gives you a short summary, then asks before taking action."
+  },
+  {
+    "id": "06",
+    "start": 38,
+    "duration": 7,
+    "text": "Say, sure, go ahead. Your decision becomes a GitHub issue, with a result you can verify."
+  },
+  {
+    "id": "07",
+    "start": 45,
+    "duration": 7,
+    "text": "When you're done, say, Chatty, stop. Okay. She stays quiet, and keeps listening."
+  },
+  {
+    "id": "08",
+    "start": 52,
+    "duration": 8,
+    "text": "Less searching. Less meeting admin. More momentum. Chatty. From conversation to action."
+  }
+]

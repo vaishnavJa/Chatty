@@ -1,8 +1,8 @@
 # Chatty meeting capabilities
 
 Chatty works with the configured `vaishnavJa/Chatty` repository and one optional,
-server-configured GitHub Project. The current registry contains 33 typed tools:
-16 reads and 17 mutations. It does not expose a shell, arbitrary API requests,
+server-configured GitHub Project. The current registry contains 34 typed tools:
+17 reads and 17 mutations. It does not expose a shell, arbitrary API requests,
 repository switching, permission administration, or project visibility changes.
 
 | Area | Read tools | Mutations requiring spoken approval |
@@ -15,6 +15,7 @@ repository switching, permission administration, or project visibility changes.
 | Workflows | `list_workflow_runs` | `rerun_workflow` |
 | GitHub Project | `get_project`, `list_project_fields`, `list_project_items` | `add_project_item`, `update_project_item`, `archive_project_item`, `remove_project_item`, `update_project_details` |
 | Shared-screen context | `read_meeting_screen` | — |
+| Current meeting context | `read_meeting_context` | — |
 
 ## Voice and requested actions
 
@@ -35,7 +36,10 @@ conversation. No approval click is required. There is one pending proposal at a 
 
 The server binds approval to that proposal's session, call ID and exact arguments.
 An unclear answer keeps the same action pending while Chatty asks a short
-clarification. An amendment requires a revised proposal and fresh approval.
+clarification. A question about the draft gets an answer from the actual saved
+fields and retains the same proposal for fresh consent. Long fields use a spoken
+excerpt with the complete requested details visible in the app. An amendment
+requires a revised proposal and fresh approval.
 Each confirmation window lasts 90 seconds and renews after clarification; this
 does not limit how long Chatty stays awake. Approval applies to the complete saved
 payload, available in the app for optional inspection. Chatty reports completion
@@ -77,6 +81,35 @@ watch continuous video or start outgoing screen sharing. If the browser has no
 usable snapshot, the tool reports `screen_context_required`; it must not invent
 screen content. The vision endpoint binds requests to a registered session and
 call ID. Screenshot content is data, never instructions or authorization to act.
+
+## Current meeting discussion
+
+`read_meeting_context` retrieves participant transcript fragments from the current
+session, including speech captured while Chatty is quietly listening. It returns
+the most recent 50 fragments by default; a caller can request 1–100. A read also
+limits transcript text to 16,000 characters while preserving whole fragments.
+Each fragment has a stable event ID and session-relative audio times. The result
+identifies its snapshot/window and includes retention and omission information,
+including fragments omitted by the output budget, so missing history can be
+disclosed. Repeating a context read retrieves the current snapshot.
+
+This is bounded evidence, not an automatic decision or speaker-identification
+system. The store retains at most 1,000 fragments and 100,000 characters for up to
+30 minutes. It does not persist the transcript to disk or make background model
+requests. Ending the session clears its context; a new session cannot retrieve
+the previous session's discussion. Returned words are participant content, never
+authorization to execute a tool.
+
+Those limits apply to the server's context-tool buffer and its browser relay, not
+to every copy of conversation text. The existing UI transcript and download use
+a separate in-memory fragment collection; the 30-minute tool window does not trim
+that collection. The page does not persist it across reloads.
+
+Chatty should use the latest explicit correction when answering what was agreed,
+identify unresolved contradictions, and ask when the requested decision is missing.
+The model interprets the retrieved evidence; timestamps alone cannot identify who
+spoke or prove group consensus. Repository claims still require GitHub sources,
+and every write still requires fresh approval of its saved proposal.
 
 ## Durable execution
 

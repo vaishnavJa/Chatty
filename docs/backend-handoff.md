@@ -76,6 +76,13 @@ original call's receipt after approval, rejection, requested revision or expiry.
 An ambiguous answer returns a clarification prompt without a receipt; retain the
 same saved action, speak the short clarification and collect a fresh reply.
 The backend accepts meaning-based consent rather than requiring a fixed phrase.
+Questions about the saved draft return nonterminal `question` with `answer`,
+`details`, a consent `prompt` and a renewed expiry. Speak that answer and prompt,
+re-arm, and wait for fresh consent; do not complete the original function call.
+Answers use the saved fields, with explicit spoken excerpts for long values.
+Readiness failures may return retryable `prompt_retry_required`; use its saved
+canonical prompt within the browser's bounded retry allowance rather than
+canceling a useful draft or treating a failed check as permission.
 
 The legacy top-level `approved: true` on `/api/tools/execute` is not authority to
 write. A direct write returns `authorization_required` without executing. Only the
@@ -116,6 +123,26 @@ The UI owns the single local **Okay** acknowledgment for spoken **Chatty, stop**
 while remote output remains muted; the Stop button is silent. Input stays enabled
 for the next wake word.
 
+## Current-session discussion evidence
+
+The browser relays actual participant transcript events to
+`POST /api/meeting/context` with `session_id`, `events`, `batch_sequence` and
+optional `dropped_before`. Each batch contains at most 32 exact
+`session.input_transcript.delta` envelopes with `event_id`, `delta`, `start_ms`
+and `end_ms`; assistant transcripts are not accepted. Sequence and event replay
+checks preserve source fragments instead of merging repeated words heuristically.
+
+`read_meeting_context` uses the normal tool route after the browser flushes its
+relay. It returns a fresh bounded snapshot rather than a cached old transcript.
+`POST /api/meeting/context/end` accepts only `session_id`, clears the store and
+prevents late packets from repopulating that context. Stop is different from End:
+it leaves input listening and context collection active.
+
+The server buffer and browser relay are bounded; the existing UI transcript is
+a separate in-memory collection. See [capabilities](capabilities.md) for retention,
+output-budget and source limitations. Context is data, not consent or a claim of
+verified speakers or group agreement.
+
 ## GitHub owner: module contract
 
 Export `TOOL_SCHEMAS` and
@@ -126,7 +153,7 @@ offline fixtures only.
 
 Schemas use `{type:'function',name,description,parameters,strict?}` with object
 parameters. They are inserted unchanged under
-`session.delegation.responses.tools`. The current 33-tool registry and its 17
+`session.delegation.responses.tools`. The current 34-tool registry and its 17
 mutations are listed in [capabilities.md](capabilities.md).
 The server validates arguments using those schemas before calling the module.
 The module must enforce repository scope and its own bounded remote-operation

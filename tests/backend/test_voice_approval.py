@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from chatty.agents.tools import WRITE_TOOL_NAMES
+from chatty.agents.tools import TOOL_SCHEMAS, WRITE_TOOL_NAMES
 from chatty.approval_language import ApprovalLanguage
 from chatty.integrations.gpt_live.executor import (
     ExecutorError,
@@ -661,4 +661,188 @@ def test_voice_endpoint_cannot_supply_new_payload(server_fixture):
     )
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_request"
+    assert not calls
+
+
+@pytest.fixture
+def draft_flow(flow):
+    manager, calls, clock = flow
+    manager.executor.sessions["s"].tools = ToolRegistry(
+        TOOL_SCHEMAS, lambda *args: calls.append(args) or {"ok": True}
+    )
+    return manager, calls, clock
+
+
+def test_saved_draft_question_preserves_action_and_needs_new_consent(draft_flow):
+    manager, calls, clock = draft_flow
+    saved = {
+        "issue_number": 17,
+        "assignees": ["karimkohel"],
+        "body": "Keep this exact draft.",
+    }
+    proposal = armed(manager, prepared(manager, name="update_issue", arguments=saved))
+    clock[0] = 30
+    answer = speak(manager, proposal, "Who is assigned?")
+    assert answer["status"] == "question"
+    assert "karimkohel" in answer["answer"]
+    assert "Keep this exact draft." not in answer["answer"]
+    assert answer["details"] == {"assignees": ["karimkohel"]}
+    assert "receipt" not in answer
+    pending = manager.approvals[proposal["approval_id"]]
+    assert pending.arguments == saved
+    assert pending.call_id == proposal["call_id"]
+    assert pending.deadline == 120
+    assert speak(manager, proposal, "Who is assigned?") == answer
+    answer["details"]["assignees"].append("not-approved")
+    assert pending.arguments == saved
+    with pytest.raises(ExecutorError, match="finished asking"):
+        speak(manager, proposal, "yes", event_id="early", start=2500, end=2700)
+    assert manager.interrupt("s", proposal["approval_id"])["armed"] is False
+    armed(
+        manager,
+        {**proposal, "prompt": answer["prompt"]},
+        start=3000,
+        end=4000,
+        event_id="answer",
+    )
+    result = speak(
+        manager, proposal, "sounds good", event_id="consent", start=4100, end=4400
+    )
+    assert result["status"] == "approved"
+    assert calls == [("update_issue", saved)]
+    assert (
+        speak(
+            manager, proposal, "sounds good", event_id="consent", start=4100, end=4400
+        )
+        == result
+    )
+    assert len(calls) == 1
+
+
+def test_question_then_amendment_replaces_action_only_after_new_approval(draft_flow):
+    manager, calls, _ = draft_flow
+    saved = {"issue_number": 17, "assignees": ["munirad7s"]}
+    first = armed(manager, prepared(manager, name="update_issue", arguments=saved))
+    question = speak(manager, first, "Who is assigned?")
+    armed(
+        manager,
+        {**first, "prompt": question["prompt"]},
+        start=3000,
+        end=4000,
+        event_id="answer",
+    )
+    revised = speak(
+        manager,
+        first,
+        "Can you assign it to Karim?",
+        event_id="amend",
+        start=4100,
+        end=4400,
+    )
+    assert revised["status"] == "revision_requested"
+    assert not calls
+    fresh = {"issue_number": 17, "assignees": ["karimkohel"]}
+    second = prepared(manager, call="new", name="update_issue", arguments=fresh)
+    assert second["approval_id"] != first["approval_id"]
+    assert speak(manager, first, "yes")["status"] == "revision_requested"
+    with pytest.raises(ExecutorError):
+        speak(manager, second, "yes", event_id="too-early", start=4500, end=4700)
+    armed(manager, second, start=5000, end=6000, event_id="new-question")
+    assert (
+        speak(manager, second, "okay", event_id="new-consent", start=6100, end=6400)[
+            "status"
+        ]
+        == "approved"
+    )
+    assert calls == [("update_issue", fresh)]
+
+
+def test_information_request_invalidates_an_older_slow_affirmative(flow):
+    manager, calls, _ = flow
+    proposal = armed(manager)
+    entered, release = threading.Event(), threading.Event()
+    direct = manager.language.reply_intent
+
+    def classify(name, args, text):
+        if text == "You have my green light":
+            entered.set()
+            assert release.wait(3)
+            return "approve"
+        return direct(name, args, text)
+
+    manager.language.reply_intent = classify
+    with ThreadPoolExecutor() as pool:
+        old = pool.submit(speak, manager, proposal, "You have my green light")
+        assert entered.wait(1)
+        answer = speak(
+            manager,
+            proposal,
+            "What is the title?",
+            event_id="question",
+            start=2500,
+            end=2800,
+        )
+        release.set()
+        assert old.result() == answer
+    assert answer["status"] == "question"
+    assert manager.approvals[proposal["approval_id"]].state == "pending"
+    assert not calls
+
+
+@pytest.mark.parametrize("failure", [False, "exception"])
+def test_complete_question_readiness_failure_recovers_with_local_canonical_prompt(
+    flow, failure
+):
+    manager, calls, _ = flow
+    proposal = prepared(manager)
+    original = manager.language.prompt_ready
+
+    def unavailable(*args):
+        if failure == "exception":
+            raise TimeoutError("private failure details")
+        return False
+
+    manager.language.prompt_ready = unavailable
+    result = manager.arm(
+        "s",
+        proposal["approval_id"],
+        [
+            event(
+                "I'll open a demo issue. Sound good?",
+                role="output",
+                start=1000,
+                end=2000,
+            )
+        ],
+        True,
+    )
+    assert result["armed"] is False
+    assert result["code"] == "prompt_retry_required"
+    assert result["prompt"] == proposal["prompt"]
+    assert result["expires_at"] == proposal["expires_at"]
+    assert result["retryable"] is True
+    assert "private failure" not in str(result)
+    assert not calls
+    with pytest.raises(ExecutorError):
+        speak(manager, proposal)
+    manager.language.prompt_ready = original
+    armed(manager, proposal, start=3000, end=4000, event_id="recovered-output")
+    assert (
+        speak(manager, proposal, "yes", event_id="fresh-consent", start=4100, end=4400)[
+            "status"
+        ]
+        == "approved"
+    )
+    assert len(calls) == 1
+
+
+def test_question_keeps_expiry_and_stop_protections(flow):
+    manager, calls, clock = flow
+    proposal = armed(manager)
+    assert speak(manager, proposal, "What is the title?")["status"] == "question"
+    clock[0] = 91
+    assert (
+        speak(manager, proposal, "yes", event_id="late", start=5000, end=5200)["status"]
+        == "expired"
+    )
     assert not calls

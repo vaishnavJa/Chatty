@@ -25,6 +25,7 @@ from chatty.agents.tools import (
 )
 from chatty.config import Settings
 from chatty.integrations.github.dedup import CallLedger
+from chatty.meeting_context import ContextError, MeetingContext
 
 ALLOWED_TOOLS = frozenset(TOOLS)
 
@@ -160,6 +161,7 @@ class Session:
     created: float
     tools: ToolRegistry
     calls: dict[str, Call] = field(default_factory=dict)
+    context: MeetingContext = field(default_factory=MeetingContext)
 
 
 class ToolExecutor:
@@ -173,11 +175,61 @@ class ToolExecutor:
     def _prune(self) -> None:
         now = self.clock()
         for key, session in list(self.sessions.items()):
+            session.context.prune(now)
+            if now - session.created >= self.settings.session_ttl_seconds:
+                session.context.clear()
             if now - session.created >= self.settings.session_ttl_seconds and all(
                 not call.started or call.result.done()
                 for call in session.calls.values()
             ):
                 del self.sessions[key]
+
+    def prune(self) -> None:
+        """Periodic local memory cleanup, including expired idle sessions."""
+        with self.lock:
+            self._prune()
+
+    def append_meeting_context(
+        self, session_id, events, batch_sequence, dropped_before=0
+    ):
+        with self.lock:
+            self._prune()
+            session = self.sessions.get(session_id)
+            if (
+                session is None
+                or self.clock() - session.created >= self.settings.session_ttl_seconds
+            ):
+                raise ExecutorError(
+                    404, "unknown_session", "Unknown or expired Live session."
+                )
+            try:
+                return session.context.append(
+                    events,
+                    batch_sequence=batch_sequence,
+                    dropped_before=dropped_before,
+                    now=self.clock(),
+                )
+            except ContextError as error:
+                status = (
+                    409
+                    if error.code
+                    in {
+                        "meeting_context_closed",
+                        "context_batch_conflict",
+                        "context_batch_order",
+                        "context_event_conflict",
+                    }
+                    else 400
+                )
+                raise ExecutorError(status, error.code, str(error)) from None
+
+    def end_meeting_context(self, session_id):
+        with self.lock:
+            self._prune()
+            session = self.sessions.get(session_id)
+            if session is not None:
+                session.context.clear()
+            return {"ok": True, "context_closed": True}
 
     def ensure_capacity(self) -> None:
         with self.lock:
@@ -285,6 +337,25 @@ class ToolExecutor:
                     )
                 call = Call(fingerprint)
                 session.calls[call_id] = call  # Reserve BEFORE any side effect.
+            if name == "read_meeting_context":
+                # A read retry is a fresh atomic snapshot. Store only the call's
+                # identity and a completion marker, never transcript receipts:
+                # otherwise many reads would evade the evidence memory bound.
+                try:
+                    result = session.context.read(
+                        limit=arguments.get("limit", 50), now=self.clock()
+                    )
+                except ContextError as error:
+                    raise ExecutorError(409, error.code, str(error)) from None
+                call.started = True
+                if not call.result.done():
+                    call.result.set_result(None)
+                return {
+                    "call_id": call_id,
+                    "output": self.settings.redact(
+                        json.dumps(result, ensure_ascii=False, allow_nan=False)
+                    ),
+                }
             if name in WRITE_TOOL_NAMES and not approved and not call.started:
                 # Bind the exact proposed payload but do not cache a final denial:
                 # the voice-approval manager may authorize this exact saved call.

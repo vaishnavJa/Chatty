@@ -20,9 +20,11 @@ from dataclasses import dataclass, field
 
 from chatty.agents.tools import WRITE_TOOL_NAMES
 from chatty.approval_language import (
+    QUESTION,
     ApprovalLanguage,
     confirmation_prompt,
     prompt_input_boundary,
+    proposal_answer,
 )
 from chatty.integrations.gpt_live.executor import ExecutorError
 
@@ -331,6 +333,19 @@ class VoiceApprovals:
                 }
             if not ready:
                 approval.state = "pending"
+                if QUESTION.search(text) or "?" in text:
+                    # Playback ended with a question, but semantic verification
+                    # was unavailable or did not match. Ask the bounded saved
+                    # prompt again; its exact local fast path needs no network.
+                    approval.prompt_seen = False
+                    return {
+                        "armed": False,
+                        "retryable": True,
+                        "code": "prompt_retry_required",
+                        "message": "I couldn't confirm the approval question. I'll ask again briefly; the draft is still saved.",
+                        "prompt": approval.prompt,
+                        "expires_at": approval.expires_at,
+                    }
                 return {
                     "armed": False,
                     "retryable": True,
@@ -504,6 +519,17 @@ class VoiceApprovals:
                     "prompt": approval.prompt,
                     "expires_at": approval.expires_at,
                 }
+                if intent == "question":
+                    # Reading a draft is not consent, and continued speech may
+                    # not bypass the fresh question after this new information.
+                    approval.prompt_seen = False
+                    detail = proposal_answer(approval.name, approval.arguments, text)
+                    outcome.update(
+                        status="question",
+                        message="The proposed action is unchanged. Answer the draft question, then ask for fresh approval.",
+                        prompt=f"{detail['answer']}\n{approval.prompt}",
+                        **detail,
+                    )
                 result.set_result(outcome)
                 return outcome
             else:

@@ -93,18 +93,28 @@ _SCREEN_SCHEMA = _schema(
     },
     ["question"],
 )
+_CONTEXT_SCHEMA = _schema(
+    "read_meeting_context",
+    "Read recent raw participant transcript evidence from this Live session, "
+    "with fragment references and session audio timestamps. Use when explicitly "
+    "asked about the meeting discussion or its proposed decisions. Fragments "
+    "may overlap; no speaker identity, final agreement or approval is inferred.",
+    {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}},
+    [],
+)
 _MODULES = (repository_tools, project_tools)
 TOOL_SCHEMAS = [
     *_LEGACY_SCHEMAS,
     *(schema for module in _MODULES for schema in module.TOOL_SCHEMAS),
     _SCREEN_SCHEMA,
+    _CONTEXT_SCHEMA,
 ]
 TOOLS = {schema["name"]: schema for schema in TOOL_SCHEMAS}
 if len(TOOLS) != len(TOOL_SCHEMAS):
     raise ValueError("Tool names must be unique across registered adapters")
 READ_TOOL_NAMES = (
     frozenset(_READ_NAMES)
-    | {"read_meeting_screen"}
+    | {"read_meeting_screen", "read_meeting_context"}
     | frozenset(name for module in _MODULES for name in module.READ_TOOLS)
 )
 WRITE_TOOL_NAMES = frozenset({"create_issue"}) | frozenset(
@@ -116,7 +126,7 @@ TOOL_CAPABILITIES = {
         "requires_approval": schema["name"] == "create_issue",
         "destructive": False,
     }
-    for schema in (*_LEGACY_SCHEMAS, _SCREEN_SCHEMA)
+    for schema in (*_LEGACY_SCHEMAS, _SCREEN_SCHEMA, _CONTEXT_SCHEMA)
 }
 for _module in _MODULES:
     TOOL_CAPABILITIES.update(_module.TOOL_CAPABILITIES)
@@ -145,6 +155,8 @@ def _validate(name, arguments, explicit_user_request):
     if type(arguments) is not dict:
         return _failure("invalid_arguments", "Arguments must be a JSON object.")
     if name in _READ_NAMES:
+        return _validate_read(arguments)
+    if name == "read_meeting_context":
         return _validate_read(arguments)
     if name == "create_issue":
         return _validate_create(arguments, explicit_user_request)
@@ -211,6 +223,11 @@ def execute_tool(name, arguments, *, explicit_user_request=False):
 
 def _execute_validated(name, arguments):
     """Run an allowlisted operation after validation and write reservation."""
+    if name == "read_meeting_context":
+        return _failure(
+            "meeting_context_required",
+            "Meeting context must be read through the registered local Live session.",
+        )
     if name == "read_meeting_screen":
         return _failure(
             "screen_context_required",

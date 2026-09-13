@@ -1,12 +1,16 @@
 # Chatty: quick live demo
 
+For a short demonstration of a group decision becoming one approved issue, use
+the [one-minute rehearsal sequence](judging-demo.md). Keep the promotional film
+separate from evidence of real meeting audio and GitHub execution.
+
 Run `uv run chatty` from the repository and open <http://localhost:3000> in Chrome. The local server must have `OPENAI_API_KEY` configured and GitHub CLI access to `vaishnavJa/Chatty`. The browser never receives either credential.
 
 ## Two-minute microphone test
 
 1. Leave **Microphone · quick test** selected and click **Start session**. Allow microphone access. Wait for **Connected to Live**; the UI does not mark a session connected before Live starts.
 2. Ask: “Chatty, what are the latest three commits in the Chatty repository?” Look for your words and Chatty’s response under **Conversation**, and the returned GitHub sources under **Actions & sources**.
-3. Follow up without the wake word: “Create an issue for saving meeting summaries with decisions and owners.” Chatty asks a brief confirmation about that action rather than reading all fields. Reply **Yes, go ahead** or an equivalent natural answer. No approval click is needed. An unclear reply should lead to a short clarification while the same action stays pending. A successful action shows the actual GitHub URL; **No** or **cancel** declines it.
+3. Follow up without the wake word: “Create an issue for saving meeting summaries with decisions and owners.” Chatty asks a brief confirmation about that action rather than reading all fields. Ask “What would you put in the description?” to inspect the saved draft before deciding. It should answer without creating or canceling the issue, then ask again. Reply **Yes, go ahead** or an equivalent natural answer. No approval click is needed. An unclear reply should lead to a short clarification while the same action stays pending. A successful action shows the actual GitHub URL; **No** or **cancel** declines it.
 4. While Chatty answers, say “Chatty, stop.” Remote replies mute immediately and a short local **Okay** acknowledges the spoken command; input stays on. The **Stop speaking** button mutes silently. Say “Hey Chatty” or click **Resume** to start active conversation again. Ordinary pauses and completed answers do not mute it.
 5. Click **Summarize**. The UI waits for Live to accept the summary instruction, then prompts it to speak. Only actual Live output appears as the summary; a backend completion does not mean it was spoken or heard.
 6. Click **Transcript** to download the actual captured fragments and source links. Click **End session** to stop capture and close Live.

@@ -1,5 +1,6 @@
 import { captureInput, listAudioOutputs, requestAudioOutputs } from './media.js';
 import { createMeetingVision } from './vision.js';
+import { createMeetingContext } from './context.js';
 import { connectLive } from './live.js';
 import { DemoController, reviewTarget, validateCapabilities } from './controller.js';
 
@@ -98,6 +99,17 @@ function renderStatus() {
     input = ready ? `${current.source === 'microphone' ? 'Microphone' : 'Meeting tab'} on · replies enabled` : 'Preparing audio';
     if (ready && speech === 'waiting') { title = 'Listening for “Chatty”.'; description = 'Say Chatty once to start a conversation. Follow-up requests stay active until Chatty stop.'; input = 'Meeting audio on · replies muted'; }
     if (ready && speech === 'stopped') { title = 'Quiet, until you need me.'; description = 'Say “Chatty” or click Resume to hear replies again.'; input = 'Input on · replies muted'; }
+    if (ready && speech === 'listening') {
+      const interaction = {
+        proposing: ['A quick check before I act.', 'Chatty will briefly describe the change. Ask a question, suggest a change, or give your decision.'],
+        answering: ['Let’s check the draft.', 'Chatty is answering from the saved proposal. Nothing changes until you approve.'],
+        decision: ['Your call.', 'Say “sure, go ahead,” ask about the draft, or tell Chatty what to change.'],
+        checking: ['Checking your decision.', 'Chatty is processing your reply. Any change already underway will report its result.'],
+        working: ['Checking the details.', 'Waiting for the connected tools. Chatty will confirm what succeeded or explain what needs attention.'],
+        speaking: ['Chatty is speaking.', 'Follow up naturally, or say “Chatty, stop” to return to quiet listening.'],
+      }[displayed?.activity];
+      if (interaction) [title, description] = interaction;
+    }
     if (phase === 'reconnecting') { title = 'Reconnecting…'; description = 'The audio connection was interrupted.'; input = 'Connection interrupted'; }
   } else if (phase === 'error') { title = 'Let’s reconnect.'; description = 'Check the error above, then start a new session.'; }
   else if (phase === 'closed') { title = 'Conversation saved on this page.'; description = 'Download the transcript or start a fresh session.'; }
@@ -140,13 +152,13 @@ function renderCaptions(controller) {
 }
 
 function renderTools(controller) {
-  const signature = JSON.stringify([...controller.calls.values()].map(call => [call.call_id, call.status, call.message, call.proposal, call.output])) + controller.speech + controller.active;
+  const signature = JSON.stringify([...controller.calls.values()].map(call => [call.call_id, call.status, call.message, call.proposal, call.answer, call.details, call.output])) + controller.speech + controller.active;
   if (toolViews.get(controller) === signature) return;
   toolViews.set(controller, signature);
   const container = $('tool-activity');
   $('action-count').textContent = String(controller.calls.size);
   if (!controller.calls.size) return;
-  const labels = { pending: 'Pending', running: 'Working…', approval: 'Spoken approval', complete: 'Confirmed', error: 'Failed', rejected: 'Not applied', uncertain: 'Check GitHub', canceled: 'Canceled' };
+  const labels = { pending: 'Pending', running: 'Working…', approval: 'Your decision', complete: 'Confirmed', error: 'Needs attention', rejected: 'Not applied', uncertain: 'Result uncertain', canceled: 'Canceled' };
   const cards = [...controller.calls.values()].reverse().map(call => {
     const card = element('article', `tool-card ${call.status}`);
     const heading = element('div', 'tool-heading');
@@ -154,11 +166,17 @@ function renderTools(controller) {
     card.append(heading);
     if (call.capability?.requires_approval) {
       card.append(element('p', '', `Target: ${reviewTarget(call)}`));
+      if (call.proposal) card.append(element('p', '', call.proposal));
+      if (call.answer && !call.proposal?.includes(call.answer)) card.append(element('p', '', call.answer));
+      const proposal = element('details');
+      proposal.append(element('summary', '', call.status === 'approval' ? 'View exact proposed change' : 'View saved change details'), element('pre', 'tool-body', JSON.stringify(call.arguments, null, 2)));
+      card.append(proposal);
+      if (call.details && typeof call.details === 'object') {
+        const answerDetails = element('details');
+        answerDetails.append(element('summary', '', 'View requested draft details'), element('pre', 'tool-body', JSON.stringify(call.details, null, 2)));
+        card.append(answerDetails);
+      }
       if (call.status === 'approval') {
-        if (call.proposal) card.append(element('p', '', call.proposal));
-        const proposal = element('details');
-        proposal.append(element('summary', '', 'View exact proposed change'), element('pre', 'tool-body', JSON.stringify(call.arguments, null, 2)));
-        card.append(proposal);
         if (call.capability.destructive) card.append(element('p', '', 'This change can remove data or change repository history. Listen to the exact proposal before replying.'));
         const buttons = element('div', 'approval-actions');
         const reject = element('button', 'button', 'Cancel change');
@@ -221,8 +239,14 @@ async function startSession() {
   if (current || health?.openai_configured !== true || !capabilities || (controls.source.value === 'meeting-tab' && !loopbackOutput(chosenOutput()))) return;
   clearError();
   const source = controls.source.value;
-  const run = { id: ++sequence, source, outputDeviceId: controls.output.value, screenContext: controls.vision.checked, abort: new AbortController(), capture: null, handle: null, controller: null, vision: null, visionState: 'off' };
-  run.controller = new DemoController({ source, capabilities, approval: approveByVoice, execute: (body, signal) => {
+  const run = { id: ++sequence, source, outputDeviceId: controls.output.value, screenContext: controls.vision.checked, abort: new AbortController(), capture: null, handle: null, controller: null, context: null, vision: null, visionState: 'off' };
+  run.controller = new DemoController({ source, capabilities, approval: approveByVoice, onTranscript: event => run.context?.add(event), execute: async (body, signal) => {
+    if (body.name === 'read_meeting_context') {
+      if (current !== run || !run.context) throw new Error('Meeting context is unavailable for this session. Ask for the missing details before acting.');
+      await run.context.flush();
+      const call = run.controller.calls.get(body.call_id);
+      if (current !== run || signal?.aborted || run.controller.speech !== 'listening' || run.controller.groups.get(call?.key)?.blocked) throw new Error('The request stopped before meeting context was ready. Ask again when Chatty is listening.');
+    }
     if (body.name !== 'read_meeting_screen') return executeTool(body, signal);
     if (!run.vision?.enabled || current !== run) throw new Error('Incoming screen context is off. Enable it before starting a meeting session.');
     return run.vision.analyze(body.arguments.question, { callId: body.call_id, signal });
@@ -247,7 +271,7 @@ async function startSession() {
         if (state === 'playback-blocked') showError(details.message ?? 'Click Resume to allow audio playback.');
         if (state === 'connecting' || state === 'ready' || state === 'reconnecting' || state === 'closing') phase = state;
         if (state === 'closed') {
-          run.controller.end(); run.vision?.stop(); run.capture?.stop(); current = null;
+          run.controller.end(); run.context?.stop(); run.vision?.stop(); run.capture?.stop(); current = null;
           phase = lastError ? 'error' : 'closed';
         }
         renderStatus();
@@ -255,6 +279,9 @@ async function startSession() {
     });
     if (current !== run) { handle.close(); capture.stop(); return; }
     run.handle = handle;
+    run.context = createMeetingContext({ sessionId: handle.sessionId, onError: () => {
+      if (current === run) showError('Meeting context could not be saved. Chatty will need the missing details before acting on the discussion.');
+    } });
     if (capture.videoStream) {
       run.vision = createMeetingVision({ stream: capture.videoStream, sessionId: handle.sessionId, onState: (state, details = {}) => {
         if (current !== run) return;
@@ -269,6 +296,7 @@ async function startSession() {
     phase = 'ready'; renderStatus();
   } catch (error) {
     run.handle?.close();
+    run.context?.stop();
     run.vision?.stop();
     run.capture?.stop();
     run.controller.end();
@@ -286,7 +314,7 @@ function endSession() {
   ++sequence;
   run.controller.end();
   // End invalidates callbacks before stopping tracks or resolving a chooser.
-  run.abort.abort(); run.vision?.stop(); run.capture?.stop();
+  run.abort.abort(); run.context?.stop(); run.vision?.stop(); run.capture?.stop();
   run.handle?.close();
   phase = 'closed'; renderStatus();
 }

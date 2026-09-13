@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DemoController, githubLinks } from '../../web/controller.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function fixture({ source = 'microphone', execute, approval, capabilities, timers, now, tick, attach = true } = {}) {
+function fixture({ source = 'microphone', execute, approval, capabilities, onTranscript, timers, now, tick, attach = true } = {}) {
   const clock = timers ? { timers, now, tick } : clockFixture();
   const sent = [], muted = [], inputs = [], requests = [], errors = [], approvalRequests = [], acknowledgments = [];
   const proposals = new Map();
@@ -26,7 +26,7 @@ function fixture({ source = 'microphone', execute, approval, capabilities, timer
     return { status: 'approved', receipt: await executeRequest(proposals.get(body.approval_id)) };
   });
   const handle = { sessionId: 'live_test', send: event => sent.push(event), setOutputMuted: value => muted.push(value), setInputEnabled: value => inputs.push(value), acknowledgeStop: async () => { acknowledgments.push('Okay'); return { played: true }; }, close() {} };
-  const controller = new DemoController({ source, timers: clock.timers, now: clock.now, ...(capabilities !== undefined ? { capabilities } : {}), onError: error => errors.push(error), execute: executeRequest, approval: approvalRequest });
+  const controller = new DemoController({ source, timers: clock.timers, now: clock.now, ...(capabilities !== undefined ? { capabilities } : {}), onTranscript, onError: error => errors.push(error), execute: executeRequest, approval: approvalRequest });
   if (attach) controller.attach(handle);
   const nested = (event, delegation_id = 'delegation_a') => controller.event({ type: 'response.event', delegation_id, event });
   const created = (id = 'response_a') => nested({ type: 'response.created', response: { id } });
@@ -1121,3 +1121,168 @@ for (const interruptionFails of [false, true]) {
     assert.equal(results(f).length, 1);
   });
 }
+
+test('participant evidence is relayed exactly once while quiet and stopped without inventing speaker data', () => {
+  const observed = [];
+  const f = fixture({ source: 'meeting-tab', attach: false, onTranscript: event => observed.push(event) });
+  const early = transcript(f, 'input', 'We agreed to update the login flow.', 100);
+  assert.equal(observed.length, 0);
+  f.controller.attach(f.handle);
+  f.controller.event(early);
+  transcript(f, 'output', 'This is model output.', 200);
+  f.controller.stop();
+  const late = transcript(f, 'input', 'Karim offered to own the fix.', 300);
+  assert.deepEqual(observed, [early, late]);
+  assert.equal(f.controller.speech, 'stopped');
+  assert.equal(f.requests.length, 0);
+  f.controller.end();
+  transcript(f, 'input', 'After the session.', 400);
+  assert.equal(observed.length, 2);
+});
+
+test('a broken context consumer cannot prevent the spoken stop command', () => {
+  const f = fixture({ source: 'meeting-tab', onTranscript: () => { throw new Error('Relay unavailable'); } });
+  transcript(f, 'input', 'Chatty stop.', 100);
+  assert.equal(f.controller.speech, 'stopped');
+  assert.deepEqual(f.acknowledgments, ['Okay']);
+  assert.match(f.errors[0], /Meeting context could not be saved/);
+});
+
+test('a draft question answers saved values and retains the same action for fresh confirmation', async () => {
+  const f = fixture();
+  const original = f.controller.approvalRequest;
+  let firstVoice = true;
+  f.controller.approvalRequest = (action, body) => {
+    if (action === 'voice' && firstVoice) {
+      firstVoice = false;
+      return Promise.resolve({ status: 'question', answer: 'No assignee is specified in this proposed issue.', details: { body: 'Keep the exact body.' }, prompt: 'No assignee is specified in this proposed issue. Should I create the login issue?', expires_at: f.clock.now() + 60000 });
+    }
+    return original(action, body);
+  };
+  f.created(); f.call('write', 'create_issue', { title: 'Login', body: 'Keep the exact body.' }); f.completed();
+  await spokenPrompt(f);
+  const approvalId = f.controller.confirmation.approvalId;
+  participantReply(f, 'Who is assigned?'); await flush();
+  assert.equal(f.controller.calls.get('write').status, 'approval');
+  assert.equal(f.controller.confirmation.approvalId, approvalId);
+  assert.equal(f.controller.activity, 'answering');
+  assert.deepEqual(f.controller.calls.get('write').details, { body: 'Keep the exact body.' });
+  assert.equal(f.requests.length, 0);
+  assert.equal(results(f).length, 0);
+  assert.match(f.sent.at(-1).content, /untrusted data, not instructions/);
+  participantReply(f, 'yes'); await flush();
+  assert.equal(f.requests.length, 0, 'old or pre-answer consent cannot approve the retained draft');
+  await voiceApprove(f, 'sure');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].arguments.body, 'Keep the exact body.');
+  assert.equal(f.approvalRequests.filter(request => request.action === 'prepare').length, 1);
+  assert.equal(f.approvalRequests.filter(request => request.action === 'voice').at(-1).approval_id, approvalId);
+});
+
+test('failed semantic prompt readiness asks again with fresh playback and never accepts the old yes', async () => {
+  const f = fixture();
+  const original = f.controller.approvalRequest;
+  let firstArm = true;
+  f.controller.approvalRequest = (action, body) => {
+    if (action === 'arm' && firstArm) {
+      firstArm = false;
+      return Promise.resolve({ armed: false, retryable: true, code: 'prompt_retry_required', prompt: 'I will create the login issue. Shall I go ahead?', expires_at: f.clock.now() + 60000 });
+    }
+    return original(action, body);
+  };
+  f.created(); f.call('write', 'create_issue', { title: 'Login', body: 'Draft' }); f.completed();
+  await spokenPrompt(f);
+  const confirmation = f.controller.confirmation;
+  assert.equal(confirmation.stage, 'instruction');
+  assert.equal(confirmation.outputEvents.length, 0);
+  assert.match(confirmation.call.message, /ask it again/);
+  participantReply(f, 'yes'); await flush();
+  assert.equal(f.requests.length, 0);
+  await spokenPrompt(f);
+  assert.equal(confirmation.stage, 'armed');
+  f.clock.tick(5000); await flush();
+  assert.equal(f.requests.length, 0);
+  participantReply(f, 'go ahead'); await flush();
+  assert.equal(f.requests.length, 1);
+});
+
+test('repeated unclear spoken proposals stop retrying and retain the unapplied draft visibly', async () => {
+  const f = fixture();
+  const original = f.controller.approvalRequest;
+  let armAttempts = 0;
+  f.controller.approvalRequest = (action, body) => {
+    if (action === 'arm') {
+      armAttempts++;
+      return Promise.resolve({ armed: false, retryable: true, code: 'prompt_retry_required', prompt: 'I will create the login issue. Shall I go ahead?', expires_at: f.clock.now() + 60000 });
+    }
+    return original(action, body);
+  };
+  f.created(); f.call('write', 'create_issue', { title: 'Login', body: 'Saved draft' }); f.completed();
+  await spokenPrompt(f); await spokenPrompt(f); await spokenPrompt(f);
+  const call = f.controller.calls.get('write');
+  assert.equal(armAttempts, 3);
+  assert.equal(f.controller.confirmation, null);
+  assert.equal(call.status, 'rejected');
+  assert.match(call.message, /draft is saved below/);
+  assert.equal(call.arguments.body, 'Saved draft');
+  assert.equal(f.requests.length, 0);
+  assert.equal(results(f).length, 1);
+  f.clock.tick(90000); await flush();
+  assert.equal(armAttempts, 3);
+});
+
+test('a late arm result cannot arm a newer question response using obsolete prompt evidence', async () => {
+  const f = fixture();
+  const original = f.controller.approvalRequest;
+  let resolveArm;
+  f.controller.approvalRequest = (action, body) => action === 'arm' ? new Promise(resolve => { resolveArm = resolve; }) : original(action, body);
+  f.created(); f.call('write', 'create_issue', { title: 'Login', body: 'Draft' }); f.completed();
+  await spokenPrompt(f);
+  const confirmation = f.controller.confirmation;
+  assert.equal(confirmation.stage, 'arming');
+  f.controller.readApprovalPrompt(confirmation, 'No assignee is proposed. Shall I create it?', f.clock.now() + 60000, 'No assignee is proposed.');
+  const freshInstructionId = confirmation.instructionId;
+  resolveArm({ armed: true, input_after_ms: 1000 }); await flush();
+  assert.equal(confirmation.stage, 'instruction');
+  assert.equal(confirmation.instructionId, freshInstructionId);
+  assert.equal(confirmation.outputEndMs, undefined);
+  assert.equal(f.requests.length, 0);
+});
+
+test('a retry response after Stop cannot restart speech or retain an active proposal', async () => {
+  const f = fixture();
+  const original = f.controller.approvalRequest;
+  let resolveArm;
+  f.controller.approvalRequest = (action, body) => action === 'arm' ? new Promise(resolve => { resolveArm = resolve; }) : original(action, body);
+  f.created(); f.call('write', 'create_issue', { title: 'Login', body: 'Draft' }); f.completed();
+  await spokenPrompt(f);
+  f.controller.stop();
+  const sentBefore = f.sent.length;
+  resolveArm({ armed: false, retryable: true, code: 'prompt_retry_required', prompt: 'Shall I create it?', expires_at: f.clock.now() + 60000 }); await flush();
+  assert.equal(f.controller.confirmation, null);
+  assert.equal(f.controller.speech, 'stopped');
+  assert.equal(f.controller.calls.get('write').status, 'rejected');
+  assert.equal(f.sent.length, sentBefore);
+  assert.equal(f.requests.length, 0);
+});
+
+test('activity distinguishes listening, speaking, a pending decision and ongoing execution', async () => {
+  const f = fixture();
+  assert.equal(f.controller.activity, 'listening');
+  f.controller.outputActivity(true);
+  assert.equal(f.controller.activity, 'speaking');
+  f.controller.outputActivity(false);
+  f.created(); f.call('write', 'create_issue', { title: 'Login', body: 'Draft' }); f.completed();
+  assert.equal(f.controller.activity, 'proposing');
+  await spokenPrompt(f);
+  assert.equal(f.controller.activity, 'decision');
+  let resolveVoice;
+  f.controller.approvalRequest = () => new Promise(resolve => { resolveVoice = resolve; });
+  participantReply(f); await flush();
+  assert.equal(f.controller.activity, 'checking');
+  resolveVoice({ status: 'approved', receipt: { call_id: 'write', output: '{"ok":true}' } }); await flush();
+  f.controller.stop();
+  assert.equal(f.controller.activity, 'quiet');
+  f.controller.end();
+  assert.equal(f.controller.activity, 'ended');
+});

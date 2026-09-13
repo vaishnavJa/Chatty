@@ -9,19 +9,19 @@
     "id": "02",
     "start": 6,
     "duration": 7,
-    "text": "Meet Chatty, the AI teammate that brings your project into the meeting. Just say her name."
+    "text": "Meet Chatty, your AI teammate inside the meeting. Built to connect with your ticketing and work systems."
   },
   {
     "id": "03",
     "start": 13,
     "duration": 8,
-    "text": "Ask what changed. Chatty checks your GitHub repository and brings the relevant context, with sources, into the conversation."
+    "text": "With a supported connection and your permission, she can read your data, answer questions, and take approved actions."
   },
   {
     "id": "04",
     "start": 21,
     "duration": 8,
-    "text": "Keep talking. Ask a follow-up. Turn the discussion into an issue, and shape the draft together."
+    "text": "Keep talking. Ask a follow-up. Turn a decision into a ticket, and shape the draft together."
   },
   {
     "id": "05",
@@ -33,7 +33,7 @@
     "id": "06",
     "start": 38,
     "duration": 7,
-    "text": "Say, sure, go ahead. Your decision becomes a GitHub issue, with a result you can verify."
+    "text": "Say, sure, go ahead. This GitHub example turns your decision into an issue you can verify."
   },
   {
     "id": "07",
@@ -45,6 +45,6 @@
     "id": "08",
     "start": 52,
     "duration": 8,
-    "text": "Less searching. Less meeting admin. More momentum. Chatty. From conversation to action."
+    "text": "Your tools. Your data. One conversation. Chatty. From conversation to action."
   }
 ]

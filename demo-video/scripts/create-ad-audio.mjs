@@ -7,7 +7,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const script = JSON.parse(
   readFileSync(resolve(root, "src/ad-script.json"), "utf8"),
 );
-const scratch = resolve(root, "out/ad-audio");
+const localVoice = process.argv.includes("--local-voice");
+const scratch = resolve(
+  root,
+  localVoice ? "out/ad-audio-local" : "out/ad-audio",
+);
 const destination = resolve(root, "public/audio/ad");
 mkdirSync(scratch, { recursive: true });
 mkdirSync(destination, { recursive: true });
@@ -45,7 +49,22 @@ function command(program, args) {
 const timings = [];
 for (const part of script) {
   const raw = resolve(scratch, `narration-${part.id}.wav`);
-  if (!existsSync(raw)) {
+  if (!existsSync(raw) && localVoice) {
+    const aiff = resolve(scratch, `narration-${part.id}.aiff`);
+    command("say", ["-v", "Samantha", "-r", "180", "-o", aiff, part.text]);
+    command("ffmpeg", [
+      "-y",
+      "-v",
+      "error",
+      "-i",
+      aiff,
+      "-ar",
+      "48000",
+      "-ac",
+      "1",
+      raw,
+    ]);
+  } else if (!existsSync(raw)) {
     const response = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -305,6 +324,6 @@ writeFileSync(
 writeFileSync(
   resolve(root, "out/chatty-ad-script.txt"),
   script.map((part) => `${stamp(part.start)}\n${part.text}`).join("\n\n") +
-    "\n\nAI-generated narration by OpenAI (marin). Original synthesized instrumental music. Product scenes are illustrative, with fictional people and example repository content; they are not a live recording.\n",
+    `\n\n${localVoice ? "Narration synthesized locally with macOS (Samantha)." : "AI-generated narration by OpenAI (marin)."} Original synthesized instrumental music. Product scenes are illustrative, with fictional people and an example ticketing workflow; they are not a live recording.\n`,
 );
 console.log("Created 60-second mix, captions and narration script.");

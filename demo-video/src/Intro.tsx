@@ -1,3 +1,4 @@
+import { BrandMark as Mark } from "./BrandMark";
 import { Audio } from "@remotion/media";
 import { loadFont } from "@remotion/fonts";
 import {
@@ -54,29 +55,6 @@ const Reveal: React.FC<{
     </div>
   );
 };
-
-const Mark: React.FC<{ size?: number; dark?: boolean }> = ({
-  size = 52,
-  dark = false,
-}) => (
-  <svg width={size} height={size} viewBox="0 0 80 80" fill="none">
-    <path
-      d="M16 12H64C70.6 12 76 17.4 76 24V52C76 58.6 70.6 64 64 64H36L17 77V64H16C9.4 64 4 58.6 4 52V24C4 17.4 9.4 12 16 12Z"
-      fill={dark ? ink : orange}
-    />
-    {[0, 1, 2].map((i) => (
-      <rect
-        key={i}
-        x={22 + i * 14}
-        y={i === 1 ? 23 : 30}
-        width={8}
-        height={i === 1 ? 30 : 16}
-        rx={4}
-        fill={dark ? paper : ink}
-      />
-    ))}
-  </svg>
-);
 
 const Wave: React.FC<{ frame: number }> = ({ frame }) => (
   <div style={{ display: "flex", alignItems: "center", gap: 7, height: 124 }}>

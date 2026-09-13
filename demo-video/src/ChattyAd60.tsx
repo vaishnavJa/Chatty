@@ -1,3 +1,4 @@
+import { BrandMark as Mark } from "./BrandMark";
 import { Audio } from "@remotion/media";
 import { loadFont } from "@remotion/fonts";
 import type { CSSProperties, ReactNode } from "react";
@@ -67,32 +68,6 @@ const Reveal = ({
     </div>
   );
 };
-
-const Mark = ({
-  size = 52,
-  dark = false,
-}: {
-  size?: number;
-  dark?: boolean;
-}) => (
-  <svg width={size} height={size} viewBox="0 0 80 80" fill="none">
-    <path
-      d="M16 12H64C70.6 12 76 17.4 76 24V52C76 58.6 70.6 64 64 64H36L17 77V64H16C9.4 64 4 58.6 4 52V24C4 17.4 9.4 12 16 12Z"
-      fill={dark ? ink : orange}
-    />
-    {[0, 1, 2].map((i) => (
-      <rect
-        key={i}
-        x={22 + i * 14}
-        y={i === 1 ? 23 : 30}
-        width={8}
-        height={i === 1 ? 30 : 16}
-        rx={4}
-        fill={dark ? paper : ink}
-      />
-    ))}
-  </svg>
-);
 
 const Wave = ({
   quiet = false,
@@ -229,7 +204,7 @@ const Chapter = ({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <Mark size={43} dark={orangePage} />
+          <Mark size={58} dark={orangePage} />
           <span style={{ fontSize: 33, letterSpacing: -1.4, fontWeight: 630 }}>
             chatty
           </span>
@@ -374,9 +349,9 @@ const Problem = () => {
             marginTop: 42,
           }}
         >
-          <Pill>Repository</Pill>
-          <Pill>Issues</Pill>
-          <Pill>Project board</Pill>
+          <Pill>Knowledge</Pill>
+          <Pill>Tickets</Pill>
+          <Pill>Work systems</Pill>
         </Reveal>
       </div>
     </Chapter>
@@ -405,7 +380,7 @@ const Introduction = () => {
             marginTop: 37,
           }}
         >
-          Project context and useful actions.
+          Your context and useful actions.
           <br />
           Right inside the meeting.
         </p>
@@ -475,7 +450,7 @@ const Introduction = () => {
           style={{
             height: 275,
             borderRadius: 23,
-            background: orange,
+            background: paper,
             color: ink,
             display: "flex",
             justifyContent: "center",
@@ -484,7 +459,7 @@ const Introduction = () => {
             boxShadow: `0 0 ${28 + 10 * Math.sin(frame * 0.05)}px #ff71462b`,
           }}
         >
-          <Mark size={98} dark />
+          <Mark size={206} />
           <span
             style={{
               position: "absolute",
@@ -529,55 +504,62 @@ const Introduction = () => {
 const Context = () => {
   const frame = useCurrentFrame();
   return (
-    <Chapter n="03" name="Ground the conversation" dark>
-      <Reveal style={{ position: "absolute", top: 222, left: 96 }}>
+    <Chapter n="03" name="Connect the work" dark>
+      <Reveal style={{ position: "absolute", top: 212, left: 96 }}>
         <div style={{ ...label, color: orange, marginBottom: 32 }}>
-          Connected to your GitHub
+          Built for connected work
         </div>
-        <h1 style={{ ...headline, fontSize: 107 }}>
-          Context.
+        <h1 style={{ ...headline, fontSize: 105 }}>
+          Your tools.
           <br />
-          Without the
+          Your data.
           <br />
-          <span style={{ color: orange }}>context switch.</span>
+          <span style={{ color: orange }}>One conversation.</span>
         </h1>
-        <div style={{ marginTop: 42 }}>
+        <div
+          style={{ marginTop: 35, color: soft, fontSize: 28, lineHeight: 1.42 }}
+        >
+          With a supported connection
+          <br />
+          and your permission.
+        </div>
+        <div style={{ marginTop: 23 }}>
           <Wave width={530} />
         </div>
       </Reveal>
-      <div style={{ position: "absolute", left: 1050, top: 199, width: 772 }}>
+      <div style={{ position: "absolute", left: 1050, top: 184, width: 772 }}>
         <Reveal delay={8}>
           <div
             style={{ ...label, fontSize: 16, color: soft, marginBottom: 25 }}
           >
-            Example repository context
+            How Chatty helps
           </div>
         </Reveal>
         {[
           {
-            type: "COMMIT",
-            title: "Login retry behavior changed",
-            desc: "Inspect the change behind the question.",
+            type: "READ",
+            title: "Find the relevant context",
+            desc: "Bring the information you authorize into the room.",
             icon: "↗",
           },
           {
-            type: "PULL REQUEST",
-            title: "Review the proposed fix",
-            desc: "Bring the relevant review into the meeting.",
-            icon: "⑂",
+            type: "UNDERSTAND",
+            title: "Answer in the conversation",
+            desc: "Questions, follow-ups and useful source references.",
+            icon: "◇",
           },
           {
-            type: "ISSUE",
-            title: "Connect the discussion to work",
-            desc: "Keep the source a click away.",
-            icon: "⊙",
+            type: "ACT",
+            title: "Move tickets and tasks forward",
+            desc: "Review the draft. Approve the action. Verify the result.",
+            icon: "→",
           },
         ].map((item, i) => (
           <Reveal
             key={item.type}
             delay={18 + i * 24}
             style={{
-              padding: "26px 30px",
+              padding: "24px 30px",
               background: i === 0 ? "#2a342a" : "#212822",
               border: "1px solid #ffffff15",
               borderRadius: 20,
@@ -608,19 +590,21 @@ const Context = () => {
             </div>
           </Reveal>
         ))}
-        <Reveal delay={103}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 9,
-              color: green,
-              fontSize: 20,
-              marginTop: 25,
-            }}
-          >
-            <Check size={24} /> Answers with sources
-          </div>
+        <Reveal
+          delay={95}
+          style={{
+            padding: "20px 23px",
+            border: "1px solid #b5d6a54a",
+            borderRadius: 14,
+            color: green,
+            fontSize: 23,
+            lineHeight: 1.45,
+            marginTop: 21,
+          }}
+        >
+          <strong style={{ fontWeight: 590 }}>Current demo: GitHub</strong>
+          <br />
+          <span style={{ color: soft }}>More connectors planned</span>
         </Reveal>
       </div>
     </Chapter>
@@ -650,7 +634,7 @@ const Followup = () => {
         <Reveal delay={7}>
           <Bubble
             who="Alex"
-            text="“Chatty, turn what we agreed into an issue.”"
+            text="“Chatty, turn what we agreed into a ticket.”"
           />
         </Reveal>
         <Reveal delay={63} style={{ margin: "19px 0 0 66px" }}>
@@ -723,7 +707,7 @@ const Revision = () => {
           }}
         >
           <div style={{ ...label, fontSize: 14, opacity: 0.56 }}>
-            Issue draft
+            Ticket draft
           </div>
           <div
             style={{
@@ -756,7 +740,7 @@ const Revision = () => {
         <Reveal delay={104} style={{ marginTop: 19 }}>
           <Bubble
             who="Chatty"
-            text="“I’ll create the login timeout issue with the fix we discussed. Do you approve?”"
+            text="“I’ll create the login timeout ticket with the fix we discussed. Do you approve?”"
             tone="light"
           />
         </Reveal>
@@ -783,7 +767,7 @@ const Approval = () => {
         >
           From a meeting decision
           <br />
-          to work in GitHub.
+          to work in your connected tools.
         </p>
       </Reveal>
       <div style={{ position: "absolute", left: 1050, top: 187, width: 766 }}>
@@ -812,7 +796,7 @@ const Approval = () => {
               <Check size={21} /> Issue created
             </Pill>
             <span style={{ color: soft, fontSize: 15 }}>
-              Illustrative result
+              GitHub example · Illustrative result
             </span>
           </div>
           <div style={{ fontSize: 39, lineHeight: 1.14, letterSpacing: -1.3 }}>
@@ -931,42 +915,46 @@ const Quiet = () => {
 const Finale = () => {
   const frame = useCurrentFrame();
   return (
-    <Chapter
-      n="08"
-      name="Keep the conversation moving"
-      orangePage
-      illustrative={false}
-    >
-      <div style={{ position: "absolute", left: 96, top: 174, right: 96 }}>
+    <Chapter n="08" name="Keep the conversation moving" illustrative={false}>
+      <div style={{ position: "absolute", left: 96, top: 183, width: 1110 }}>
         <Reveal>
-          <div style={{ display: "flex", alignItems: "center", gap: 22 }}>
-            <Mark size={109} dark />
-            <span style={{ fontSize: 112, fontWeight: 640, letterSpacing: -7 }}>
-              chatty
-            </span>
+          <div style={{ fontSize: 100, fontWeight: 650, letterSpacing: -6.5 }}>
+            chatty
           </div>
         </Reveal>
         <Reveal delay={16}>
           <h1
             style={{
               ...headline,
-              fontSize: 136,
-              lineHeight: 1.01,
+              fontSize: 117,
+              lineHeight: 1.035,
               marginTop: 31,
             }}
           >
             From conversation
             <br />
-            to action.
+            to <span style={{ color: "#d85c36" }}>action.</span>
           </h1>
+        </Reveal>
+        <Reveal delay={29}>
+          <div
+            style={{
+              color: "#687162",
+              fontSize: 31,
+              marginTop: 29,
+              letterSpacing: -0.8,
+            }}
+          >
+            Your tools. Your data. One conversation.
+          </div>
         </Reveal>
         <Reveal delay={42}>
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 26,
-              marginTop: 46,
+              gap: 25,
+              marginTop: 42,
             }}
           >
             <div
@@ -978,53 +966,56 @@ const Finale = () => {
                 borderRadius: 8,
                 display: "flex",
                 alignItems: "center",
-                gap: 32,
+                gap: 30,
               }}
             >
               Explore Chatty <span>↗</span>
             </div>
-            <span style={{ fontSize: 25, letterSpacing: -0.6 }}>
+            <span style={{ fontSize: 24, letterSpacing: -0.6 }}>
               github.com/vaishnavJa/Chatty
             </span>
           </div>
         </Reveal>
       </div>
-      <div
+      <Reveal
+        delay={22}
         style={{
           position: "absolute",
-          right: 97,
-          top: 228,
-          width: 288,
-          height: 288,
-          opacity: enter(frame, 38),
+          right: 79,
+          top: 214,
+          width: 530,
+          height: 530,
         }}
       >
-        {[0, 1, 2].map((i) => (
+        <div
+          style={{
+            position: "absolute",
+            inset: 17,
+            background: "#e9e7dc",
+            borderRadius: "50%",
+          }}
+        />
+        {[0, 1].map((i) => (
           <div
             key={i}
             style={{
               position: "absolute",
-              inset: i * 30,
-              border: "1px solid #171b1822",
+              inset: -12 + i * 34,
+              border: "1px solid #171b1810",
               borderRadius: "50%",
-              transform: `scale(${1 + Math.sin(frame * 0.03 - i) * 0.025})`,
+              transform: `scale(${1 + Math.sin(frame * 0.025 - i) * 0.02})`,
             }}
           />
         ))}
         <div
           style={{
-            position: "absolute",
-            inset: 99,
-            borderRadius: "50%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: ink,
+            position: "relative",
+            transform: `translateY(${Math.sin(frame * 0.035) * 7}px) rotate(${Math.sin(frame * 0.022) * 1.4}deg)`,
           }}
         >
-          <Mark size={49} />
+          <Mark size={530} />
         </div>
-      </div>
+      </Reveal>
       <div
         style={{
           position: "absolute",
@@ -1034,7 +1025,7 @@ const Finale = () => {
           opacity: 0.69,
         }}
       >
-        AI-generated voice · Illustrative product animation
+        Synthetic narration · Illustrative product animation
       </div>
     </Chapter>
   );

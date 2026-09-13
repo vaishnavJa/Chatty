@@ -1,58 +1,58 @@
 [
   {
     "id": "01",
-    "rawSeconds": 4.462271,
+    "rawSeconds": 4.766667,
     "tempo": 1,
     "spokenStart": 0.3,
-    "spokenEnd": 4.762271
+    "spokenEnd": 5.066667
   },
   {
     "id": "02",
-    "rawSeconds": 5.634979,
+    "rawSeconds": 6.099333,
     "tempo": 1,
     "spokenStart": 6.3,
-    "spokenEnd": 11.934979
+    "spokenEnd": 12.399332999999999
   },
   {
     "id": "03",
-    "rawSeconds": 6.364646,
+    "rawSeconds": 6.547333,
     "tempo": 1,
     "spokenStart": 13.3,
-    "spokenEnd": 19.664646
+    "spokenEnd": 19.847333
   },
   {
     "id": "04",
-    "rawSeconds": 5.559229,
+    "rawSeconds": 5.374667,
     "tempo": 1,
     "spokenStart": 21.3,
-    "spokenEnd": 26.859229
+    "spokenEnd": 26.674667
   },
   {
     "id": "05",
-    "rawSeconds": 6.346354,
+    "rawSeconds": 6.396667,
     "tempo": 1,
     "spokenStart": 29.3,
-    "spokenEnd": 35.646354
+    "spokenEnd": 35.696667
   },
   {
     "id": "06",
-    "rawSeconds": 5.981188,
+    "rawSeconds": 5.790667,
     "tempo": 1,
     "spokenStart": 38.3,
-    "spokenEnd": 44.281188
+    "spokenEnd": 44.090666999999996
   },
   {
     "id": "07",
-    "rawSeconds": 6.039063,
+    "rawSeconds": 5.111958,
     "tempo": 1,
     "spokenStart": 45.3,
-    "spokenEnd": 51.339062999999996
+    "spokenEnd": 50.411958
   },
   {
     "id": "08",
-    "rawSeconds": 5.483958,
+    "rawSeconds": 5.535958,
     "tempo": 1,
     "spokenStart": 52.3,
-    "spokenEnd": 57.783958
+    "spokenEnd": 57.835958
   }
 ]

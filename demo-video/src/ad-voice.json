@@ -1,0 +1,83 @@
+{
+  "model": "Kokoro-82M v1.0 ONNX fp32",
+  "voice": "af_heart",
+  "license": "Apache-2.0",
+  "source": "https://huggingface.co/hexgrad/Kokoro-82M",
+  "method": "Imported neural narration; no post-synthesis tempo changes",
+  "model_sha256": "beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a",
+  "voices_sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+  "implementation": "kokoro-onnx 0.6.1",
+  "implementationLicense": "MIT",
+  "implementationSource": "https://github.com/thewh1teagle/kokoro-onnx",
+  "voiceSource": "https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md",
+  "synthesis": {
+    "postTempo": 1,
+    "speeds": [1.05]
+  },
+  "takes": [
+    {
+      "id": "01",
+      "file": "narration-01.wav",
+      "text": "Your team is talking. A bug needs fixing. But the answers are somewhere else.",
+      "durationSeconds": 4.766667,
+      "sha256": "770da592bf68674ad6a50d1e27ef9a295ff69fb5adbf6269dcc1df9b53200f77",
+      "synthesisSpeed": 1.05
+    },
+    {
+      "id": "02",
+      "file": "narration-02.wav",
+      "text": "Meet Chatty, your AI teammate inside the meeting. Built to connect with your ticketing and work systems.",
+      "durationSeconds": 6.099333,
+      "sha256": "e3b7cf3bc1629010eb9e8e57ed2ca44e3cc433f22cb7e1dd9b7641c9027883cc",
+      "synthesisSpeed": 1.05
+    },
+    {
+      "id": "03",
+      "file": "narration-03.wav",
+      "text": "With a supported connection and your permission, she can read your data, answer questions, and take approved actions.",
+      "durationSeconds": 6.547333,
+      "sha256": "6ffa70f1cc26625ee61d85c81f13fd9fb1ed73e532e904c0bcabbfd21e713a22",
+      "synthesisSpeed": 1.05
+    },
+    {
+      "id": "04",
+      "file": "narration-04.wav",
+      "text": "Keep talking. Ask a follow-up. Turn a decision into a ticket, and shape the draft together.",
+      "durationSeconds": 5.374667,
+      "sha256": "31bfa05c2df18cbe3e701a397c49f638a510cc701c452b9eee29edeb532be43f",
+      "synthesisSpeed": 1.05
+    },
+    {
+      "id": "05",
+      "file": "narration-05.wav",
+      "text": "Refine the draft. Check the details. Chatty gives you a short summary, then asks before taking action.",
+      "durationSeconds": 6.396667,
+      "sha256": "32e702b8f7da9e590316f887fef6924920c9ab3e036b8fa5b815a3e5bd63e19d",
+      "synthesisSpeed": 1.05
+    },
+    {
+      "id": "06",
+      "file": "narration-06.wav",
+      "text": "Say, sure, go ahead. This GitHub example turns your decision into an issue you can verify.",
+      "durationSeconds": 5.790667,
+      "sha256": "e1856e57b8d2501232eca632f9075c8669203faad595bc118609bbe535e6bba7",
+      "synthesisSpeed": 1.05
+    },
+    {
+      "id": "07",
+      "file": "narration-07.wav",
+      "text": "When you're done, say, Chatty, stop. Okay. She stays quiet, and keeps listening.",
+      "durationSeconds": 5.111958,
+      "sha256": "a35a9dd5ac36e0800c96d74f0d086affb22a38a95600ea3c8cd4790123b5f3b6",
+      "synthesisSpeed": 1.05
+    },
+    {
+      "id": "08",
+      "file": "narration-08.wav",
+      "text": "Your tools. Your data. One conversation. Chatty. From conversation to action.",
+      "durationSeconds": 5.535958,
+      "sha256": "6054ba7ad3f30fd1232ea734c45a4f816cb418653f296e85a82011653d7a473f",
+      "synthesisSpeed": 1.05
+    }
+  ]
+}
